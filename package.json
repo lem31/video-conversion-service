@@ -1,3 +1,16 @@
-{"name":"video-conversion-service","version":"1.0.0","description": "FFmpeg video to MP3 conversion service","main":"index.js","scripts":{"start":"node index.js","dev":"node 
-  index.js"},"dependencies":{"body-parser":"^2.2.0","cors":"^2.8.5","express":"^5.1.0","file-type":"^21.0.0","fluent-ffmpeg":"^2.1.3","json2csv":
-  "^6.0.0-alpha.2","libreoffice-convert":"^1.6.1","mammoth":"^1.9.1","multer":"^2.0.2","sharp":"^0.34.3","xml2js":"^0.6.2"}}
+{
+  "name": "video-conversion-service",
+  "version": "1.0.0",
+  "description": "Video to MP3 conversion service",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "body-parser": "^2.2.0",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "file-type": "^21.0.0",
+    "fluent-ffmpeg": "^2.1.3"
+  }
+}
