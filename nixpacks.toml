@@ -1,8 +1,5 @@
 [phases.install]
-nixPkgs
-=
-[ffmpeg]
-[start]
-cmd
-=
-npm start
+  nixPkgs = ["ffmpeg"]
+
+  [start]
+  cmd = "npm start"
