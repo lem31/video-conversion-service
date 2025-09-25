@@ -10,6 +10,10 @@
 
   app.use(cors());
 
+  app.get('/', (req, res) => {
+    res.json({ message: 'Video conversion service is running!' });
+  });
+
   app.post('/convert-video-to-mp3', upload.single('video'), (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'No video file provided' });
