@@ -1,7 +1,7 @@
 {
   "name": "video-conversion-service",
   "version": "1.0.0",
-  "description": "Video to MP3 conversion service",
+  "description": "Video to MP3 conversion service with YouTube support",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -10,6 +10,9 @@
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "fluent-ffmpeg": "^2.1.3",
-    "multer": "^2.0.2"
+    "multer": "^2.0.2",
+    "axios": "^1.6.0",
+    "uuid": "^9.0.0",
+    "youtube-dl-exec": "^2.4.0"
   }
 }
