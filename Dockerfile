@@ -1,10 +1,16 @@
 FROM node:18
 
-# Install ffmpeg and yt-dlp
-RUN apt-get update && \
-    apt-get install -y ffmpeg python3 python3-pip && \
-    pip3 install yt-dlp && \
-    apt-get clean
+# Update package list
+RUN apt-get update
+
+# Install ffmpeg and python
+RUN apt-get install -y ffmpeg python3 python3-pip
+
+# Install yt-dlp
+RUN pip3 install yt-dlp
+
+# Clean up
+RUN apt-get clean
 
 WORKDIR /app
 
