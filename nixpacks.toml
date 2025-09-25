@@ -1,0 +1,8 @@
+[phases.install]
+nixPkgs
+=
+[ffmpeg]
+[start]
+cmd
+=
+npm start
