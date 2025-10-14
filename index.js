@@ -33,16 +33,17 @@ async function downloadVideoWithYtdlp(videoUrl, outputDir) {
   try {
     console.log('Attempting to download with yt-dlp:', videoUrl);
 
-    await youtubedl(videoUrl, {
-      output: outputTemplate,
-      format: 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/best[ext=mp4]/best',
-      noPlaylist: true,
-      noWarnings: true,
-      noCallHome: true,
-      noCheckCertificate: true,
-      preferFreeFormats: true,
-      youtubeSkipDashManifest: true
-    });
+await youtubedl(videoUrl, {
+  output: `${outputDir}/ytdlp_${videoId}.%(ext)s`, // keep %(ext)s for Linux
+  format: 'bestaudio/best', // simplified to avoid format mismatches
+  noPlaylist: true,
+  quiet: true,
+  noWarnings: true,
+  noCallHome: true,
+  noCheckCertificate: true,
+  youtubeSkipDashManifest: true
+});
+
 
     const files = fs.readdirSync(outputDir).filter(f => f.startsWith(`ytdlp_${videoId}.`));
 
