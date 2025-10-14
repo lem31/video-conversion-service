@@ -129,24 +129,37 @@ app.post('/convert-video-to-mp3', upload.single('video'), async (req, res) => {
       console.log('URL provided:', videoUrl);
       shouldCleanupInput = true;
 
-      if (isSupportedVideoUrl(videoUrl)) {
+       if (isSupportedVideoUrl(videoUrl)) {
+    const isVimeo = videoUrl.includes('vimeo.com');
+
+    // Disable Vimeo - it doesn't work reliably with yt-dlp
+    if (isVimeo) {
+      console.log('Vimeo URL detected - returning not supported error');
+      return res.status(400).json({
+        error: 'Vimeo downloads are not supported due to technical limitations. Please use YouTube or upload your video file
+  directly.',
+        errorCode: 'URL_UNSUPPORTED',
+        errorDetail: 'Vimeo actively blocks download tools and restricts access to videos. Most Vimeo videos cannot be downloaded even     
+  if they are public.'
+      });
+    }
+
     console.log('Using yt-dlp for supported platform');
     try {
       inputPath = await downloadVideoWithYtdlp(videoUrl, '/tmp');
     } catch (ytdlpError) {
-          // Extract error code and message
-          const errorMsg = ytdlpError.message || ytdlpError.toString();
-          const errorCode = errorMsg.split(':')[0];
+      const errorMsg = ytdlpError.message || ytdlpError.toString();
+      const errorCode = errorMsg.split(':')[0];
 
-          console.error('yt-dlp failed:', errorMsg);
+      console.error('yt-dlp failed:', errorMsg);
 
-          return res.status(400).json({
-            error: errorMsg,
-            errorCode: errorCode,
-            errorDetail: errorMsg.split(':')[1]?.trim() || errorMsg
-          });
-        }
-      } else {
+      return res.status(400).json({
+        error: errorMsg,
+        errorCode: errorCode,
+        errorDetail: errorMsg.split(':')[1]?.trim() || errorMsg
+      });
+    }
+  } else {
         console.log('Using direct download');
         const videoId = uuidv4();
         inputPath = `/tmp/direct_${videoId}.video`;
