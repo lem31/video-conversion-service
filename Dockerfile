@@ -1,23 +1,21 @@
 FROM node:18
 
-# Update package list
-RUN apt-get update
+# Install ffmpeg and python (required by yt-dlp)
+RUN apt-get update \
+  && apt-get install -y ffmpeg python3 python3-pip \
+  && apt-get clean
 
-# Install ffmpeg, python, and yt-dlp
-RUN apt-get install -y ffmpeg python3 python3-pip yt-dlp
+# Install yt-dlp via pip (more reliable than apt)
+RUN pip3 install yt-dlp
 
-# Clean up
-RUN apt-get clean
+# Fix permissions for /tmp so yt-dlp can write files there
+RUN chmod 777 /tmp
 
 WORKDIR /app
 
-# Copy package files
 COPY package*.json ./
-
-# Install dependencies
 RUN npm install
 
-# Copy source code
 COPY . .
 
 EXPOSE 8080
