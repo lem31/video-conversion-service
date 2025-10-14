@@ -8,6 +8,9 @@ RUN apt-get update \
 # Install yt-dlp
 RUN pip3 install yt-dlp
 
+# Fix permissions for /tmp so yt-dlp can write files there
+RUN chmod 777 /tmp
+
 WORKDIR /app
 
 COPY package*.json ./
