@@ -87,62 +87,7 @@ function isSupportedVideoUrl(url) {
     }
   }
 
-async function downloadVimeoVideo(videoUrl, outputDir) {
-  const videoId = uuidv4();
-  const outputTemplate = `${outputDir}/vimeo_${videoId}.%(ext)s`;
 
-  try {
-    console.log('=== VIMEO DOWNLOAD START ===');
-    console.log('Vimeo URL:', videoUrl);
-
-    // Vimeo-specific options
-    await youtubedl(videoUrl, {
-      output: outputTemplate,
-      // Critical Vimeo options
-      format: 'http-1080p,http-720p,http-540p,http-360p,best',
-      extractAudio: true,
-      audioFormat: 'best',
-      addHeader: [
-        'referer:https://vimeo.com/',
-        'origin:https://vimeo.com'
-      ],
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      noCheckCertificate: true,
-      noWarnings: false,
-      verbose: true
-    });
-
-    console.log('Vimeo download completed');
-
-    // Find the downloaded file
-    const allFiles = fs.readdirSync(outputDir);
-    const files = allFiles.filter(f => f.startsWith(`vimeo_${videoId}.`));
-
-    if (files.length === 0) {
-      console.error('No Vimeo file found. Files in /tmp:', allFiles.filter(f => f.includes(videoId)));
-      throw new Error('VIMEO_DOWNLOAD_FAILED: Unable to download this Vimeo video. It may be private, password-protected, or have download restrictions.');
-    }
-
-    console.log('✅ Downloaded Vimeo file:', files[0]);
-    console.log('=== VIMEO DOWNLOAD END ===');
-    return `${outputDir}/${files[0]}`;
-
-  } catch (error) {
-    console.error('Vimeo download error:', error);
-
-    const errorMsg = error.message || error.toString();
-
-    if (errorMsg.includes('password')) {
-      throw new Error('VIDEO_PRIVATE: This Vimeo video is password-protected');
-    } else if (errorMsg.includes('private') || errorMsg.includes('403')) {
-      throw new Error('VIDEO_PRIVATE: This Vimeo video is private or has download restrictions');
-    } else if (errorMsg.includes('404')) {
-      throw new Error('VIDEO_NOT_FOUND: Vimeo video not found');
-    } else {
-      throw new Error('VIMEO_DOWNLOAD_FAILED: ' + errorMsg);
-    }
-  }
-}
 async function downloadDirectVideo(videoUrl, outputPath) {
   try {
     console.log('Downloading direct video from:', videoUrl);
@@ -185,15 +130,9 @@ app.post('/convert-video-to-mp3', upload.single('video'), async (req, res) => {
       shouldCleanupInput = true;
 
       if (isSupportedVideoUrl(videoUrl)) {
-        console.log('Using yt-dlp for supported platform');
-          const isVimeo = videoUrl.includes('vimeo.com');
-        try {
-       if (isVimeo) {
-        console.log('Detected Vimeo - using Vimeo-specific handler');
-        inputPath = await downloadVimeoVideo(videoUrl, '/tmp');
-      } else {
-        inputPath = await downloadVideoWithYtdlp(videoUrl, '/tmp');
-      }
+    console.log('Using yt-dlp for supported platform');
+    try {
+      inputPath = await downloadVideoWithYtdlp(videoUrl, '/tmp');
     } catch (ytdlpError) {
           // Extract error code and message
           const errorMsg = ytdlpError.message || ytdlpError.toString();
