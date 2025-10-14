@@ -18,7 +18,7 @@ const upload = multer({
 });
 
 function isSupportedVideoUrl(url) {
-  const supportedDomains = ['youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com'];
+  const supportedDomains = ['youtube.com', 'youtu.be', 'dailymotion.com'];
   try {
     const urlObj = new URL(url);
     return supportedDomains.some(domain => urlObj.hostname.includes(domain));
