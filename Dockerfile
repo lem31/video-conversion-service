@@ -8,6 +8,9 @@ RUN apt-get update \
 # Install yt-dlp via pip (more reliable than apt)
   RUN pip3 install --no-cache-dir --upgrade yt-dlp
 
+   # Verify yt-dlp installation and show version
+  RUN yt-dlp --version
+
 # Fix permissions for /tmp so yt-dlp can write files there
 RUN chmod 777 /tmp
 
