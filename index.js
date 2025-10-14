@@ -25,71 +25,67 @@ function isSupportedVideoUrl(url) {
   } catch { return false; }
 }
 
-async function downloadVideoWithYtdlp(videoUrl, outputDir) {
-  const videoId = uuidv4();
-  // FIX: Changed from %%(ext)s to %(ext)s - this was the bug!
-  const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
+ async function downloadVideoWithYtdlp(videoUrl, outputDir) {
+    const videoId = uuidv4();
+    const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
 
-  try {
-    console.log('Attempting to download with yt-dlp:', videoUrl);
+    try {
+      console.log('Attempting to download with yt-dlp:', videoUrl);
+      console.log('Output template:', outputTemplate);
 
-const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
+      await youtubedl(videoUrl, {
+        output: outputTemplate,
+        format: 'bestaudio/best',
+        noPlaylist: true,
+        quiet: true,
+        noWarnings: true,
+        noCallHome: true,
+        noCheckCertificate: true,
+        youtubeSkipDashManifest: true
+      });
 
-await youtubedl(videoUrl, {
-  output: outputTemplate,
-  format: 'bestaudio/best',
-  noPlaylist: true,
-  quiet: true,
-  noWarnings: true,
-  noCallHome: true,
-  noCheckCertificate: true,
-  youtubeSkipDashManifest: true
-});
-const allFiles = fs.readdirSync(outputDir);
-console.log('Files in outputDir:', allFiles);
+      // List all files in output directory for debugging
+      const allFiles = fs.readdirSync(outputDir);
+      console.log('All files in /tmp after download:', allFiles);
 
-const files = allFiles.filter(f => f.startsWith(`ytdlp_${videoId}.`));
-if (files.length === 0) {
-  throw new Error('Download completed but no file was created');
-}
+      // Find the downloaded file
+      const files = allFiles.filter(f => f.startsWith(`ytdlp_${videoId}.`));
 
+      if (files.length === 0) {
+        console.error('No file found with prefix ytdlp_' + videoId);
+        console.error('Available files:', allFiles);
+        throw new Error('Download completed but no file was created');
+      }
 
+      console.log('Downloaded file:', files[0]);
+      return `${outputDir}/${files[0]}`;
 
-    const files = fs.readdirSync(outputDir).filter(f => f.startsWith(`ytdlp_${videoId}.`));
+    } catch (error) {
+      console.error('yt-dlp error details:', error);
 
-    if (files.length === 0) {
-      throw new Error('Download completed but no file was created');
-    }
+      // Map common errors to user-friendly messages
+      const errorMessage = error.message || error.toString();
 
-    console.log('Downloaded file:', files[0]);
-    return `${outputDir}/${files[0]}`;
-
-  } catch (error) {
-    console.error('yt-dlp error details:', error);
-
-    // Map common errors to user-friendly messages
-    const errorMessage = error.message || error.toString();
-
-    if (errorMessage.includes('Video unavailable')) {
-      throw new Error('VIDEO_UNAVAILABLE: This video is unavailable, private, or deleted');
-    } else if (errorMessage.includes('Private video')) {
-      throw new Error('VIDEO_PRIVATE: This video is private and cannot be downloaded');
-    } else if (errorMessage.includes('Sign in to confirm your age')) {
-      throw new Error('VIDEO_AGE_RESTRICTED: This video is age-restricted');
-    } else if (errorMessage.includes('This video is only available to Music Premium members')) {
-      throw new Error('VIDEO_REQUIRES_AUTH: This video requires authentication');
-    } else if (errorMessage.includes('copyright')) {
-      throw new Error('VIDEO_COPYRIGHT: This video cannot be downloaded due to copyright restrictions');
-    } else if (errorMessage.includes('not available in your country')) {
-      throw new Error('VIDEO_UNAVAILABLE: This video is not available in your region');
-    } else if (errorMessage.includes('HTTP Error 429')) {
-      throw new Error('RATE_LIMITED: Too many requests. Please try again later');
-    } else {
-      throw new Error(`DOWNLOAD_FAILED: ${errorMessage}`);
+      if (errorMessage.includes('Video unavailable')) {
+        throw new Error('VIDEO_UNAVAILABLE: This video is unavailable, private, or deleted');
+      } else if (errorMessage.includes('Private video')) {
+        throw new Error('VIDEO_PRIVATE: This video is private and cannot be downloaded');
+      } else if (errorMessage.includes('Sign in to confirm your age')) {
+        throw new Error('VIDEO_AGE_RESTRICTED: This video is age-restricted');
+      } else if (errorMessage.includes('This video is only available to Music Premium members')) {
+        throw new Error('VIDEO_REQUIRES_AUTH: This video requires authentication');
+      } else if (errorMessage.includes('copyright')) {
+        throw new Error('VIDEO_COPYRIGHT: This video cannot be downloaded due to copyright
+  restrictions');
+      } else if (errorMessage.includes('not available in your country')) {
+        throw new Error('VIDEO_UNAVAILABLE: This video is not available in your region');
+      } else if (errorMessage.includes('HTTP Error 429')) {
+        throw new Error('RATE_LIMITED: Too many requests. Please try again later');
+      } else {
+        throw new Error(`DOWNLOAD_FAILED: ${errorMessage}`);
+      }
     }
   }
-}
-
 async function downloadDirectVideo(videoUrl, outputPath) {
   try {
     console.log('Downloading direct video from:', videoUrl);
