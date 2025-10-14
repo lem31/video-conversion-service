@@ -28,44 +28,101 @@ function isSupportedVideoUrl(url) {
  async function downloadVideoWithYtdlp(videoUrl, outputDir) {
     const videoId = uuidv4();
     const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
+    const isVimeo = videoUrl.includes('vimeo.com');
 
     try {
-      console.log('Attempting to download with yt-dlp:', videoUrl);
+      console.log('=== DOWNLOAD START ===');
+      console.log('URL:', videoUrl);
+      console.log('Is Vimeo:', isVimeo);
       console.log('Output template:', outputTemplate);
 
-      await youtubedl(videoUrl, {
+      // Build options based on platform
+      const options = {
         output: outputTemplate,
-        format: 'bestaudio/best',
         noPlaylist: true,
-        quiet: true,
-        noWarnings: true,
         noCallHome: true,
         noCheckCertificate: true,
-        youtubeSkipDashManifest: true
-      });
+        quiet: false,
+        noWarnings: false,
+        verbose: true
+      };
 
-      // List all files in output directory for debugging
-      const allFiles = fs.readdirSync(outputDir);
-      console.log('All files in /tmp after download:', allFiles);
+      if (isVimeo) {
+        console.log('Using Vimeo-specific configuration');
+        options.format = 'http-1080p,http-720p,http-540p,http-360p,best';
+        options.addHeader = [
+          'referer:https://vimeo.com/',
+          'origin:https://vimeo.com'
+        ];
+        options.userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0
+  Safari/537.36';
+      } else {
+        console.log('Using standard configuration (YouTube, etc.)');
+        options.format = 'bestaudio/best';
+        options.youtubeSkipDashManifest = true;
+      }
 
-      // Find the downloaded file
-      const files = allFiles.filter(f => f.startsWith(`ytdlp_${videoId}.`));
+      // List files before download
+      const filesBefore = fs.readdirSync(outputDir);
+      console.log('Files before download:', filesBefore.length);
+
+      // Download
+      await youtubedl(videoUrl, options);
+
+      console.log('Download command completed');
+
+      // List files after download
+      const filesAfter = fs.readdirSync(outputDir);
+      console.log('Files after download:', filesAfter.length);
+
+      // Find new files
+      const newFiles = filesAfter.filter(f => !filesBefore.includes(f));
+      console.log('New files:', newFiles);
+
+      // Find files matching our pattern
+      const files = filesAfter.filter(f => f.startsWith(`ytdlp_${videoId}.`));
+      console.log('Files matching pattern:', files);
 
       if (files.length === 0) {
-        console.error('No file found with prefix ytdlp_' + videoId);
-        console.error('Available files:', allFiles);
+        console.error('No file found with expected pattern!');
+        console.error('New files created:', newFiles);
+
+        // If we have new files, use the first one
+        if (newFiles.length > 0) {
+          console.log('Using first new file as fallback:', newFiles[0]);
+          return `${outputDir}/${newFiles[0]}`;
+        }
+
+        if (isVimeo) {
+          throw new Error('VIMEO_DOWNLOAD_FAILED: Unable to download this Vimeo video. It may be private, password-protected, or have      
+  download restrictions.');
+        }
+
         throw new Error('Download completed but no file was created');
       }
 
-      console.log('Downloaded file:', files[0]);
+      console.log('✅ Downloaded file:', files[0]);
+      console.log('=== DOWNLOAD END ===');
       return `${outputDir}/${files[0]}`;
 
     } catch (error) {
-      console.error('yt-dlp error details:', error);
+      console.error('=== DOWNLOAD ERROR ===');
+      console.error('Error:', error.message);
 
-      // Map common errors to user-friendly messages
       const errorMessage = error.message || error.toString();
 
+      // Vimeo-specific errors
+      if (isVimeo) {
+        if (errorMessage.includes('password')) {
+          throw new Error('VIDEO_PRIVATE: This Vimeo video is password-protected');
+        } else if (errorMessage.includes('private') || errorMessage.includes('403')) {
+          throw new Error('VIDEO_PRIVATE: This Vimeo video is private or has download restrictions');
+        } else if (errorMessage.includes('404')) {
+          throw new Error('VIDEO_NOT_FOUND: Vimeo video not found');
+        }
+      }
+
+      // Generic errors
       if (errorMessage.includes('Video unavailable')) {
         throw new Error('VIDEO_UNAVAILABLE: This video is unavailable, private, or deleted');
       } else if (errorMessage.includes('Private video')) {
@@ -75,8 +132,7 @@ function isSupportedVideoUrl(url) {
       } else if (errorMessage.includes('This video is only available to Music Premium members')) {
         throw new Error('VIDEO_REQUIRES_AUTH: This video requires authentication');
       } else if (errorMessage.includes('copyright')) {
-        throw new Error('VIDEO_COPYRIGHT: This video cannot be downloaded due to copyright
-  restrictions');
+        throw new Error('VIDEO_COPYRIGHT: This video cannot be downloaded due to copyright restrictions');
       } else if (errorMessage.includes('not available in your country')) {
         throw new Error('VIDEO_UNAVAILABLE: This video is not available in your region');
       } else if (errorMessage.includes('HTTP Error 429')) {
@@ -86,7 +142,6 @@ function isSupportedVideoUrl(url) {
       }
     }
   }
-
 
 async function downloadDirectVideo(videoUrl, outputPath) {
   try {
