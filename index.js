@@ -68,7 +68,7 @@ function cleanVideoUrl(url) {
   }
 }
 
-// Remove all references to aria2c from yt-dlp config and comments
+// Remove all aria2 references from config objects and comments
 async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
   const videoId = uuidv4();
   const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
@@ -82,6 +82,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     httpChunkSize: '20M',
     proxy: process.env.CDN_PROXY_URL || undefined,
     label: 'ULTIMATE PREMIUM'
+    // aria2 removed
   } : {
     audioQuality: 4,
     concurrentFragments: 16,
@@ -89,6 +90,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     httpChunkSize: '10M',
     proxy: undefined,
     label: 'ULTRA-FAST'
+    // aria2 removed
   };
 
   try {
@@ -122,7 +124,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       limitRate: '0',
       retries: 1,
       fragmentRetries: 1
-      // aria2c removed: no externalDownloader, no externalDownloaderArgs
+      // No externalDownloader, no externalDownloaderArgs
     });
 
     const allFiles = fs.readdirSync(outputDir);
