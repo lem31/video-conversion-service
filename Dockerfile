@@ -1,25 +1,24 @@
 FROM node:18
 
-# Update package list
-RUN apt-get update
-
-# Install ffmpeg, python, and yt-dlp
-RUN apt-get install -y ffmpeg python3 python3-pip yt-dlp
-
-# Clean up
-RUN apt-get clean
+# Install dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg python3 python3-pip aria2 && \
+    pip3 install --no-cache-dir yt-dlp && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy package files
+# Copy package files and install dependencies
 COPY package*.json ./
-
-# Install dependencies
 RUN npm install
 
 # Copy source code
 COPY . .
 
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8080/ || exit 1
 
 CMD ["npm", "start"]
