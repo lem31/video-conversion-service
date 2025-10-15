@@ -32,31 +32,52 @@ function isSupportedVideoUrl(url) {
   } catch { return false; }
 }
 
-// PREMIUM: Ultra-fast download with CDN proxy
-async function downloadVideoWithYtdlpPremium(videoUrl, outputDir) {
+// ULTIMATE SPEED: Premium users get maximum speed with MP3 conversion during download
+async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     const videoId = uuidv4();
     const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
 
-    try {
-      console.log('PREMIUM SPEED download:', videoUrl);
+    const config = isPremium ? {
+      // PREMIUM: Maximum speed + better quality
+      audioQuality: 2,                   // Excellent quality (2 = very good)
+      concurrentFragments: 32,           // 32 parallel downloads
+      externalDownloaderArgs: 'aria2c:-x 32 -s 32 -k 512K -j 32 --max-connection-per-server=16',
+      bufferSize: '128K',                // Large buffer
+      httpChunkSize: '20M',              // Large chunks
+      proxy: process.env.CDN_PROXY_URL || undefined,
+      label: 'ULTIMATE PREMIUM'
+    } : {
+      // STANDARD: Good speed + good quality
+      audioQuality: 4,                   // Good quality
+      concurrentFragments: 16,           // 16 parallel downloads
+      externalDownloaderArgs: 'aria2c:-x 16 -s 16 -k 1M -j 16',
+      bufferSize: '64K',
+      httpChunkSize: '10M',
+      proxy: undefined,
+      label: 'ULTRA-FAST'
+    };
 
+    try {
+      console.log(`${config.label} download:`, videoUrl);
+
+      // ULTIMATE: Convert to MP3 DURING download (eliminates separate conversion!)
       await youtubedl(videoUrl, {
         output: outputTemplate,
         format: 'worstaudio[ext=webm]/worstaudio/bestaudio[ext=webm]',
         extractAudio: true,
-        audioFormat: 'mp3',
-        audioQuality: 3,                 // PREMIUM: Better quality (3 vs 5)
+        audioFormat: 'mp3',              // Convert to MP3 during download!
+        audioQuality: config.audioQuality,
         noPlaylist: true,
         quiet: true,
         noWarnings: true,
         noCallHome: true,
         noCheckCertificate: true,
         youtubeSkipDashManifest: true,
-        concurrentFragments: 32,         // PREMIUM: 32 fragments (vs 16)
+        concurrentFragments: config.concurrentFragments,
         externalDownloader: 'aria2c',
-        externalDownloaderArgs: 'aria2c:-x 32 -s 32 -k 512K -j 32 --max-connection-per-server=16',
-        // PREMIUM: Use CDN proxy if available
-        proxy: process.env.CDN_PROXY_URL, // Set in Railway env vars
+        externalDownloaderArgs: config.externalDownloaderArgs,
+        ...(config.proxy && { proxy: config.proxy }),
+        // Skip ALL metadata
         noWriteThumbnail: true,
         noEmbedThumbnail: true,
         noWriteInfoJson: true,
@@ -64,11 +85,12 @@ async function downloadVideoWithYtdlpPremium(videoUrl, outputDir) {
         noWriteAnnotations: true,
         noWriteComments: true,
         noWritePlaylistMetafiles: true,
+        // Speed optimizations
         noCheckFormats: true,
         noContinue: true,
-        bufferSize: '128K',              // PREMIUM: Larger buffer
-        httpChunkSize: '20M',            // PREMIUM: Larger chunks
-        limitRate: '0',
+        bufferSize: config.bufferSize,
+        httpChunkSize: config.httpChunkSize,
+        limitRate: '0',                  // No rate limit!
         retries: 1,
         fragmentRetries: 1
       });
@@ -80,54 +102,7 @@ async function downloadVideoWithYtdlpPremium(videoUrl, outputDir) {
         throw new Error('Download failed');
       }
 
-      console.log('Downloaded:', files[0]);
-      return `${outputDir}/${files[0]}`;
-
-    } catch (error) {
-      throw error;
-    }
-}
-
-// Standard speed download for free users
-async function downloadVideoWithYtdlpStandard(videoUrl, outputDir) {
-    const videoId = uuidv4();
-    const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
-
-    try {
-      console.log('Standard speed download:', videoUrl);
-
-      await youtubedl(videoUrl, {
-        output: outputTemplate,
-        format: 'worstaudio[ext=webm]/worstaudio/bestaudio[ext=webm]',
-        extractAudio: true,
-        audioFormat: 'mp3',
-        audioQuality: 5,                 // Standard quality
-        noPlaylist: true,
-        quiet: true,
-        noWarnings: true,
-        noCallHome: true,
-        noCheckCertificate: true,
-        youtubeSkipDashManifest: true,
-        concurrentFragments: 16,
-        externalDownloader: 'aria2c',
-        externalDownloaderArgs: 'aria2c:-x 16 -s 16 -k 1M -j 16',
-        noWriteThumbnail: true,
-        noEmbedThumbnail: true,
-        noWriteInfoJson: true,
-        bufferSize: '64K',
-        httpChunkSize: '10M',
-        limitRate: '0',
-        retries: 1,
-        fragmentRetries: 1
-      });
-
-      const allFiles = fs.readdirSync(outputDir);
-      const files = allFiles.filter(f => f.startsWith(`ytdlp_${videoId}.`));
-
-      if (files.length === 0) {
-        throw new Error('Download failed');
-      }
-
+      console.log(`${config.label} downloaded:`, files[0]);
       return `${outputDir}/${files[0]}`;
 
     } catch (error) {
@@ -176,28 +151,32 @@ async function downloadDirectVideo(videoUrl, outputPath) {
   }
 }
 
-// PREMIUM: Better quality conversion
-function convertToMp3Premium(inputPath, outputPath) {
+// ULTIMATE: Direct FFmpeg spawn for maximum speed (used only if yt-dlp doesn't output MP3)
+function convertToMp3Ultimate(inputPath, outputPath, isPremium) {
   return new Promise((resolve, reject) => {
-    console.log('PREMIUM conversion...');
+    const label = isPremium ? 'ULTIMATE PREMIUM' : 'ULTRA-FAST';
+    console.log(`${label} conversion...`);
+
+    const bitrate = isPremium ? '192k' : '128k';
+    const quality = isPremium ? '2' : '4';
 
     const ffmpeg = spawn('ffmpeg', [
-      '-threads', '0',
+      '-threads', '0',              // All cores
       '-i', inputPath,
-      '-vn',
-      '-sn',
-      '-dn',
-      '-map', '0:a:0',
+      '-vn',                        // No video
+      '-sn',                        // No subtitles
+      '-dn',                        // No data streams
+      '-map', '0:a:0',              // Only first audio
       '-c:a', 'libmp3lame',
-      '-b:a', '192k',               // PREMIUM: Higher bitrate
+      '-b:a', bitrate,
       '-ar', '44100',
       '-ac', '2',
-      '-compression_level', '0',
-      '-q:a', '2',                  // PREMIUM: Higher quality
-      '-write_xing', '0',
-      '-id3v2_version', '0',
+      '-compression_level', '0',    // NO compression for speed
+      '-q:a', quality,
+      '-write_xing', '0',           // Skip extra metadata
+      '-id3v2_version', '0',        // Skip ID3 tags
       '-f', 'mp3',
-      '-y',
+      '-y',                         // Overwrite
       outputPath
     ]);
 
@@ -208,49 +187,7 @@ function convertToMp3Premium(inputPath, outputPath) {
 
     ffmpeg.on('close', (code) => {
       if (code === 0) {
-        console.log('Premium conversion done!');
-        resolve();
-      } else {
-        reject(new Error(`FFmpeg failed: ${stderr}`));
-      }
-    });
-
-    ffmpeg.on('error', reject);
-  });
-}
-
-// Standard conversion
-function convertToMp3Standard(inputPath, outputPath) {
-  return new Promise((resolve, reject) => {
-    console.log('Standard conversion...');
-
-    const ffmpeg = spawn('ffmpeg', [
-      '-threads', '0',
-      '-i', inputPath,
-      '-vn',
-      '-sn',
-      '-dn',
-      '-map', '0:a:0',
-      '-c:a', 'libmp3lame',
-      '-b:a', '128k',
-      '-ar', '44100',
-      '-ac', '2',
-      '-compression_level', '0',
-      '-q:a', '4',
-      '-write_xing', '0',
-      '-id3v2_version', '0',
-      '-f', 'mp3',
-      '-y',
-      outputPath
-    ]);
-
-    let stderr = '';
-    ffmpeg.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    ffmpeg.on('close', (code) => {
-      if (code === 0) {
+        console.log(`${label} conversion done!`);
         resolve();
       } else {
         reject(new Error(`FFmpeg failed: ${stderr}`));
@@ -263,7 +200,7 @@ function convertToMp3Standard(inputPath, outputPath) {
 
 app.post('/convert-video-to-mp3', upload.single('video'), async (req, res) => {
   const premium = isPremiumUser(req);
-  console.log(`Conversion request - ${premium ? 'PREMIUM' : 'STANDARD'} user`);
+  console.log(`ULTIMATE conversion request - ${premium ? 'PREMIUM' : 'STANDARD'} user`);
 
   let inputPath;
   let shouldCleanupInput = false;
@@ -286,14 +223,12 @@ app.post('/convert-video-to-mp3', upload.single('video'), async (req, res) => {
         }
 
         try {
-          // Use premium or standard download based on user tier
-          inputPath = premium
-            ? await downloadVideoWithYtdlpPremium(videoUrl, '/tmp')
-            : await downloadVideoWithYtdlpStandard(videoUrl, '/tmp');
+          // Use ULTIMATE speed with tier-based settings
+          inputPath = await downloadVideoWithYtdlpUltimate(videoUrl, '/tmp', premium);
 
-          // If already MP3, skip conversion
+          // If already MP3 (yt-dlp converted it during download), skip conversion!
           if (inputPath.endsWith('.mp3')) {
-            console.log('Already MP3!');
+            console.log('Already MP3! No conversion needed.');
             const stats = fs.statSync(inputPath);
             const audioData = fs.readFileSync(inputPath);
             const base64Audio = audioData.toString('base64');
@@ -301,7 +236,7 @@ app.post('/convert-video-to-mp3', upload.single('video'), async (req, res) => {
             fs.unlinkSync(inputPath);
 
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-            console.log(`Total: ${elapsed}s`);
+            console.log(`Total: ${elapsed}s (${premium ? 'PREMIUM' : 'STANDARD'})`);
 
             return res.json({
               success: true,
@@ -338,12 +273,8 @@ app.post('/convert-video-to-mp3', upload.single('video'), async (req, res) => {
     const outputId = uuidv4();
     const outputPath = `/tmp/converted_${outputId}.mp3`;
 
-    // Use premium or standard conversion
-    if (premium) {
-      await convertToMp3Premium(inputPath, outputPath);
-    } else {
-      await convertToMp3Standard(inputPath, outputPath);
-    }
+    // Convert with tier-based settings
+    await convertToMp3Ultimate(inputPath, outputPath, premium);
 
     const stats = fs.statSync(outputPath);
     const audioData = fs.readFileSync(outputPath);
@@ -382,11 +313,11 @@ app.post('/convert-video-to-mp3', upload.single('video'), async (req, res) => {
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
-    mode: 'PREMIUM + STANDARD',
+    mode: 'ULTIMATE (Premium + Standard)',
     cdnEnabled: !!process.env.CDN_PROXY_URL
   });
 });
 
 app.listen(port, () => {
-  console.log(`Premium conversion service on port ${port}`);
+  console.log(`ULTIMATE conversion service on port ${port}`);
 });
