@@ -68,7 +68,7 @@ function cleanVideoUrl(url) {
   }
 }
 
-// Remove aria2c usage from yt-dlp config (banned on Railway)
+// Remove all references to aria2c from yt-dlp config and comments
 async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
   const videoId = uuidv4();
   const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
@@ -122,7 +122,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       limitRate: '0',
       retries: 1,
       fragmentRetries: 1
-      // Removed externalDownloader and externalDownloaderArgs (aria2c)
+      // aria2c removed: no externalDownloader, no externalDownloaderArgs
     });
 
     const allFiles = fs.readdirSync(outputDir);
