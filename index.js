@@ -68,7 +68,7 @@ function cleanVideoUrl(url) {
   }
 }
 
-// ULTIMATE SPEED: Premium users get maximum speed with MP3 conversion during download
+// Remove aria2c usage from yt-dlp config (banned on Railway)
 async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
   const videoId = uuidv4();
   const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
@@ -122,6 +122,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       limitRate: '0',
       retries: 1,
       fragmentRetries: 1
+      // Removed externalDownloader and externalDownloaderArgs (aria2c)
     });
 
     const allFiles = fs.readdirSync(outputDir);
