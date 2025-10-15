@@ -71,6 +71,7 @@ function cleanVideoUrl(url) {
 // Remove all aria2 references from config objects and comments
 // Fix: yt-dlp --limit-rate "0" is invalid, must be a positive value or omitted for unlimited speed
 // Remove limitRate: '0' from yt-dlp options
+// Fix: Remove deprecated yt-dlp options: --no-call-home, --youtube-skip-dash-manifest, --no-write-annotations
 async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
   const videoId = uuidv4();
   const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
@@ -105,16 +106,13 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       noPlaylist: true,
       quiet: true,
       noWarnings: true,
-      noCallHome: true,
       noCheckCertificate: true,
-      youtubeSkipDashManifest: true,
       concurrentFragments: config.concurrentFragments,
       ...(config.proxy && { proxy: config.proxy }),
       noWriteThumbnail: true,
       noEmbedThumbnail: true,
       noWriteInfoJson: true,
       noWriteDescription: true,
-      noWriteAnnotations: true,
       noWriteComments: true,
       noWritePlaylistMetafiles: true,
       noCheckFormats: true,
@@ -123,6 +121,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       httpChunkSize: config.httpChunkSize,
       retries: 1,
       fragmentRetries: 1
+      // Removed: noCallHome, youtubeSkipDashManifest, noWriteAnnotations
     });
 
     const allFiles = fs.readdirSync(outputDir);
