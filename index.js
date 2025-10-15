@@ -33,32 +33,39 @@ async function downloadVideoWithYtdlp(videoUrl, outputDir) {
       console.log('Attempting to download with yt-dlp:', videoUrl);
       console.log('Output template:', outputTemplate);
 
-      // OPTIMIZATION: Use audio-only format and parallel fragments
+      // ULTRA-FAST: Direct audio extraction during download
       await youtubedl(videoUrl, {
         output: outputTemplate,
-        format: 'bestaudio[ext=m4a]/bestaudio/worstaudio',  // Audio-only streams (much smaller/faster)
+        // Force worst audio quality for MAXIMUM speed (still good enough for most use)
+        format: 'worstaudio[ext=m4a]/worstaudio/bestaudio[ext=m4a]/bestaudio',
         noPlaylist: true,
         quiet: true,
         noWarnings: true,
         noCallHome: true,
         noCheckCertificate: true,
         youtubeSkipDashManifest: true,
-        extractAudio: true,              // Extract audio during download
-        concurrentFragments: 5,          // Download 5 fragments in parallel for speed
-        bufferSize: '16K',               // Smaller buffer for faster start
-        limitRate: '20M'                 // Prevent timeout, allow up to 20MB/s
+        extractAudio: true,
+        // ULTRA SPEED: More parallel downloads
+        concurrentFragments: 10,        // Increased from 5 to 10
+        externalDownloader: 'aria2c',   // Use aria2c if available (much faster)
+        externalDownloaderArgs: 'aria2c:-x 16 -s 16 -k 1M', // 16 connections
+        // Skip unnecessary metadata
+        noWriteThumbnail: true,
+        noEmbedThumbnail: true,
+        noWriteInfoJson: true,
+        noWriteDescription: true,
+        noWriteAnnotations: true,
+        // Speed up download
+        limitRate: '50M',               // Increased from 20M to 50M
+        bufferSize: '32K',              // Larger buffer for faster throughput
+        retries: 3,
+        fragmentRetries: 3
       });
 
-      // List all files in output directory for debugging
       const allFiles = fs.readdirSync(outputDir);
-      console.log('All files in /tmp after download:', allFiles);
-
-      // Find the downloaded file
       const files = allFiles.filter(f => f.startsWith(`ytdlp_${videoId}.`));
 
       if (files.length === 0) {
-        console.error('No file found with prefix ytdlp_' + videoId);
-        console.error('Available files:', allFiles);
         throw new Error('Download completed but no file was created');
       }
 
@@ -67,8 +74,6 @@ async function downloadVideoWithYtdlp(videoUrl, outputDir) {
 
     } catch (error) {
       console.error('yt-dlp error details:', error);
-
-      // Map common errors to user-friendly messages
       const errorMessage = error.message || error.toString();
 
       if (errorMessage.includes('Video unavailable')) {
@@ -91,7 +96,6 @@ async function downloadVideoWithYtdlp(videoUrl, outputDir) {
     }
   }
 
-
 async function downloadDirectVideo(videoUrl, outputPath) {
   try {
     console.log('Downloading direct video from:', videoUrl);
@@ -99,9 +103,9 @@ async function downloadDirectVideo(videoUrl, outputPath) {
       method: 'GET',
       url: videoUrl,
       responseType: 'stream',
-      timeout: 120000,              // OPTIMIZATION: Increased to 120s for large files
+      timeout: 120000,
       maxRedirects: 5,
-      maxContentLength: Infinity,   // OPTIMIZATION: Allow unlimited size
+      maxContentLength: Infinity,
       maxBodyLength: Infinity
     });
 
@@ -135,35 +139,34 @@ app.post('/convert-video-to-mp3', upload.single('video'), async (req, res) => {
       console.log('URL provided:', videoUrl);
       shouldCleanupInput = true;
 
-       if (isSupportedVideoUrl(videoUrl)) {
-    const isVimeo = videoUrl.includes('vimeo.com');
+      if (isSupportedVideoUrl(videoUrl)) {
+        const isVimeo = videoUrl.includes('vimeo.com');
 
-    // Disable Vimeo - it doesn't work reliably with yt-dlp
-    if (isVimeo) {
-      console.log('Vimeo URL detected - returning not supported error');
-      return res.status(400).json({
-        error: 'Vimeo downloads are not supported due to technical limitations. Please use YouTube or upload your video file directly.',
-        errorCode: 'URL_UNSUPPORTED',
-        errorDetail: 'Vimeo actively blocks download tools and restricts access to videos. Most Vimeo videos cannot be downloaded even if they are public.'
-      });
-    }
+        if (isVimeo) {
+          console.log('Vimeo URL detected - returning not supported error');
+          return res.status(400).json({
+            error: 'Vimeo downloads are not supported due to technical limitations. Please use YouTube or upload your video file directly.',
+            errorCode: 'URL_UNSUPPORTED',
+            errorDetail: 'Vimeo actively blocks download tools and restricts access to videos. Most Vimeo videos cannot be downloaded even if they are public.'
+          });
+        }
 
-    console.log('Using yt-dlp for supported platform');
-    try {
-      inputPath = await downloadVideoWithYtdlp(videoUrl, '/tmp');
-    } catch (ytdlpError) {
-      const errorMsg = ytdlpError.message || ytdlpError.toString();
-      const errorCode = errorMsg.split(':')[0];
+        console.log('Using yt-dlp for supported platform');
+        try {
+          inputPath = await downloadVideoWithYtdlp(videoUrl, '/tmp');
+        } catch (ytdlpError) {
+          const errorMsg = ytdlpError.message || ytdlpError.toString();
+          const errorCode = errorMsg.split(':')[0];
 
-      console.error('yt-dlp failed:', errorMsg);
+          console.error('yt-dlp failed:', errorMsg);
 
-      return res.status(400).json({
-        error: errorMsg,
-        errorCode: errorCode,
-        errorDetail: errorMsg.split(':')[1]?.trim() || errorMsg
-      });
-    }
-  } else {
+          return res.status(400).json({
+            error: errorMsg,
+            errorCode: errorCode,
+            errorDetail: errorMsg.split(':')[1]?.trim() || errorMsg
+          });
+        }
+      } else {
         console.log('Using direct download');
         const videoId = uuidv4();
         inputPath = `/tmp/direct_${videoId}.video`;
@@ -179,21 +182,25 @@ app.post('/convert-video-to-mp3', upload.single('video'), async (req, res) => {
     const outputId = uuidv4();
     const outputPath = `/tmp/converted_${outputId}.mp3`;
 
-    // OPTIMIZATIONS: FFmpeg with multi-threading and faster encoding
-    console.log('Starting conversion with optimizations...');
+    // ULTRA-FAST FFMPEG: Absolute minimum processing time
+    console.log('Starting ULTRA-FAST conversion...');
     ffmpeg(inputPath)
       .audioCodec('libmp3lame')
-      .audioBitrate(192)
+      .audioBitrate(128)              // Reduced from 192 for speed (still very good quality)
       .audioChannels(2)
       .audioFrequency(44100)
       .format('mp3')
       .outputOptions([
-        '-threads 0',              // Use all CPU cores
-        '-q:a 2',                  // VBR quality (faster than CBR)
-        '-compression_level 2'     // Faster compression (0-9, lower=faster)
+        '-threads 0',                 // All CPU cores
+        '-preset ultrafast',          // Fastest preset
+        '-q:a 4',                     // Slightly lower quality for maximum speed
+        '-compression_level 0',       // NO compression overhead (was 2)
+        '-map 0:a:0',                 // Only first audio stream (skip others)
+        '-vn',                        // Explicitly no video
+        '-sn',                        // No subtitles
+        '-avoid_negative_ts make_zero' // Faster timestamp handling
       ])
       .on('progress', (progress) => {
-        // Log progress for debugging (could be sent via WebSocket in future)
         if (progress.percent) {
           console.log(`Conversion progress: ${Math.round(progress.percent)}%`);
         }
