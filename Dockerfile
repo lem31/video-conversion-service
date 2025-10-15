@@ -2,11 +2,10 @@ FROM node:18
 
 # Install ffmpeg and python (required by yt-dlp)
 RUN apt-get update \
-  && apt-get install -y ffmpeg python3 python3-pip \
+  && apt-get install -y ffmpeg python3 python3-pip yt-dlp \
   && apt-get clean
 
-# Install yt-dlp via pip (more reliable than apt)
-RUN apk add --no-cache ffmpeg yt-dlp python3 py3-pip
+
 
    # Verify yt-dlp installation and show version
   RUN yt-dlp --version
