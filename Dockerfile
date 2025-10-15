@@ -1,17 +1,18 @@
 FROM node:18
 
-# Install ffmpeg and python (required by yt-dlp)
+# Install ffmpeg, python3, and yt-dlp using apt-get
 RUN apt-get update \
   && apt-get install -y ffmpeg python3 python3-pip yt-dlp \
   && apt-get clean
 
-
-
-   # Verify yt-dlp installation and show version
-  RUN yt-dlp --version
+# Verify yt-dlp installation and show version
+RUN yt-dlp --version
 
 # Fix permissions for /tmp so yt-dlp can write files there
 RUN chmod 777 /tmp
+
+# Add: Ensure /tmp exists and is writable for yt-dlp and ffmpeg
+RUN mkdir -p /tmp && chmod 777 /tmp
 
 WORKDIR /app
 
