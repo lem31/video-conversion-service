@@ -198,7 +198,18 @@ function convertToMp3Ultimate(inputPath, outputPath, isPremium) {
   });
 }
 
-app.post('/convert-video-to-mp3', upload.single('video'), async (req, res) => {
+// Middleware that handles both file uploads and URL-only requests
+const handleUpload = (req, res, next) => {
+  upload.single('video')(req, res, (err) => {
+    // Multer error handling - but allow "no file" scenarios
+    if (err && err.code !== 'LIMIT_UNEXPECTED_FILE') {
+      return res.status(400).json({ error: err.message, errorCode: 'UPLOAD_ERROR' });
+    }
+    next();
+  });
+};
+
+app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
   const premium = isPremiumUser(req);
   console.log(`ULTIMATE conversion request - ${premium ? 'PREMIUM' : 'STANDARD'} user`);
 
