@@ -75,8 +75,15 @@ function cleanVideoUrl(url) {
 // Fix: Use a more compatible yt-dlp format string for YouTube audio extraction
 // Replace 'worstaudio[ext=webm]/worstaudio/bestaudio[ext=webm]' with 'bestaudio/best'
 
-const ffmpegPath = require('ffmpeg-static');
-process.env.FFMPEG_PATH = ffmpegPath;
+let ffmpegPath;
+try {
+  ffmpegPath = require('ffmpeg-static');
+  process.env.FFMPEG_PATH = ffmpegPath;
+  console.log('Using ffmpeg-static:', ffmpegPath);
+} catch (err) {
+  console.log('ffmpeg-static not found, using system ffmpeg');
+  // Do not set process.env.FFMPEG_PATH, let yt-dlp use system ffmpeg
+}
 
 async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
   const videoId = uuidv4();
