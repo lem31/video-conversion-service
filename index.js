@@ -33,15 +33,20 @@ async function downloadVideoWithYtdlp(videoUrl, outputDir) {
       console.log('Attempting to download with yt-dlp:', videoUrl);
       console.log('Output template:', outputTemplate);
 
+      // OPTIMIZATION: Use audio-only format and parallel fragments
       await youtubedl(videoUrl, {
         output: outputTemplate,
-        format: 'bestaudio/best',
+        format: 'bestaudio[ext=m4a]/bestaudio/worstaudio',  // Audio-only streams (much smaller/faster)
         noPlaylist: true,
         quiet: true,
         noWarnings: true,
         noCallHome: true,
         noCheckCertificate: true,
-        youtubeSkipDashManifest: true
+        youtubeSkipDashManifest: true,
+        extractAudio: true,              // Extract audio during download
+        concurrentFragments: 5,          // Download 5 fragments in parallel for speed
+        bufferSize: '16K',               // Smaller buffer for faster start
+        limitRate: '20M'                 // Prevent timeout, allow up to 20MB/s
       });
 
       // List all files in output directory for debugging
@@ -75,8 +80,7 @@ async function downloadVideoWithYtdlp(videoUrl, outputDir) {
       } else if (errorMessage.includes('This video is only available to Music Premium members')) {
         throw new Error('VIDEO_REQUIRES_AUTH: This video requires authentication');
       } else if (errorMessage.includes('copyright')) {
-        throw new Error('VIDEO_COPYRIGHT: This video cannot be downloaded due to copyright
-  restrictions');
+        throw new Error('VIDEO_COPYRIGHT: This video cannot be downloaded due to copyright restrictions');
       } else if (errorMessage.includes('not available in your country')) {
         throw new Error('VIDEO_UNAVAILABLE: This video is not available in your region');
       } else if (errorMessage.includes('HTTP Error 429')) {
@@ -95,8 +99,10 @@ async function downloadDirectVideo(videoUrl, outputPath) {
       method: 'GET',
       url: videoUrl,
       responseType: 'stream',
-      timeout: 60000,
-      maxRedirects: 5
+      timeout: 120000,              // OPTIMIZATION: Increased to 120s for large files
+      maxRedirects: 5,
+      maxContentLength: Infinity,   // OPTIMIZATION: Allow unlimited size
+      maxBodyLength: Infinity
     });
 
     const writer = fs.createWriteStream(outputPath);
@@ -136,11 +142,9 @@ app.post('/convert-video-to-mp3', upload.single('video'), async (req, res) => {
     if (isVimeo) {
       console.log('Vimeo URL detected - returning not supported error');
       return res.status(400).json({
-        error: 'Vimeo downloads are not supported due to technical limitations. Please use YouTube or upload your video file
-  directly.',
+        error: 'Vimeo downloads are not supported due to technical limitations. Please use YouTube or upload your video file directly.',
         errorCode: 'URL_UNSUPPORTED',
-        errorDetail: 'Vimeo actively blocks download tools and restricts access to videos. Most Vimeo videos cannot be downloaded even     
-  if they are public.'
+        errorDetail: 'Vimeo actively blocks download tools and restricts access to videos. Most Vimeo videos cannot be downloaded even if they are public.'
       });
     }
 
@@ -175,11 +179,25 @@ app.post('/convert-video-to-mp3', upload.single('video'), async (req, res) => {
     const outputId = uuidv4();
     const outputPath = `/tmp/converted_${outputId}.mp3`;
 
-    console.log('Starting conversion...');
+    // OPTIMIZATIONS: FFmpeg with multi-threading and faster encoding
+    console.log('Starting conversion with optimizations...');
     ffmpeg(inputPath)
       .audioCodec('libmp3lame')
       .audioBitrate(192)
+      .audioChannels(2)
+      .audioFrequency(44100)
       .format('mp3')
+      .outputOptions([
+        '-threads 0',              // Use all CPU cores
+        '-q:a 2',                  // VBR quality (faster than CBR)
+        '-compression_level 2'     // Faster compression (0-9, lower=faster)
+      ])
+      .on('progress', (progress) => {
+        // Log progress for debugging (could be sent via WebSocket in future)
+        if (progress.percent) {
+          console.log(`Conversion progress: ${Math.round(progress.percent)}%`);
+        }
+      })
       .on('end', () => {
         console.log('Conversion completed');
         const stats = fs.statSync(outputPath);
