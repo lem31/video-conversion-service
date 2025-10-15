@@ -70,104 +70,94 @@ function cleanVideoUrl(url) {
 
 // ULTIMATE SPEED: Premium users get maximum speed with MP3 conversion during download
 async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
-    const videoId = uuidv4();
-    const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
+  const videoId = uuidv4();
+  const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
 
-    // Clean the URL to remove playlist/radio parameters
-    const cleanedUrl = cleanVideoUrl(videoUrl);
+  const cleanedUrl = cleanVideoUrl(videoUrl);
 
-    const config = isPremium ? {
-      // PREMIUM: Maximum speed + better quality
-      audioQuality: 2,                   // Excellent quality (2 = very good)
-      concurrentFragments: 32,           // 32 parallel downloads
-     
-      bufferSize: '128K',                // Large buffer
-      httpChunkSize: '20M',              // Large chunks
-      proxy: process.env.CDN_PROXY_URL || undefined,
-      label: 'ULTIMATE PREMIUM'
-    } : {
-      // STANDARD: Good speed + good quality
-      audioQuality: 4,                   // Good quality
-      concurrentFragments: 16,           // 16 parallel downloads
-      externalDownloaderArgs: 'aria2c:-x 16 -s 16 -k 1M -j 16',
-      bufferSize: '64K',
-      httpChunkSize: '10M',
-      proxy: undefined,
-      label: 'ULTRA-FAST'
-    };
+  const config = isPremium ? {
+    audioQuality: 2,
+    concurrentFragments: 32,
+    bufferSize: '128K',
+    httpChunkSize: '20M',
+    proxy: process.env.CDN_PROXY_URL || undefined,
+    label: 'ULTIMATE PREMIUM'
+  } : {
+    audioQuality: 4,
+    concurrentFragments: 16,
+    bufferSize: '64K',
+    httpChunkSize: '10M',
+    proxy: undefined,
+    label: 'ULTRA-FAST'
+  };
 
-    try {
-      console.log(`${config.label} download:`, cleanedUrl);
+  try {
+    console.log(`${config.label} download:`, cleanedUrl);
 
-      // ULTIMATE: Convert to MP3 DURING download (eliminates separate conversion!)
-      await youtubedl(cleanedUrl, {
-        output: outputTemplate,
-        format: 'worstaudio[ext=webm]/worstaudio/bestaudio[ext=webm]',
-        extractAudio: true,
-        audioFormat: 'mp3',              // Convert to MP3 during download!
-        audioQuality: config.audioQuality,
-        noPlaylist: true,
-        quiet: true,
-        noWarnings: true,
-        noCallHome: true,
-        noCheckCertificate: true,
-        youtubeSkipDashManifest: true,
-        concurrentFragments: config.concurrentFragments,
-      
-        externalDownloaderArgs: config.externalDownloaderArgs,
-        ...(config.proxy && { proxy: config.proxy }),
-        // Skip ALL metadata
-        noWriteThumbnail: true,
-        noEmbedThumbnail: true,
-        noWriteInfoJson: true,
-        noWriteDescription: true,
-        noWriteAnnotations: true,
-        noWriteComments: true,
-        noWritePlaylistMetafiles: true,
-        // Speed optimizations
-        noCheckFormats: true,
-        noContinue: true,
-        bufferSize: config.bufferSize,
-        httpChunkSize: config.httpChunkSize,
-        limitRate: '0',                  // No rate limit!
-        retries: 1,
-        fragmentRetries: 1
-      });
+    await youtubedl(cleanedUrl, {
+      output: outputTemplate,
+      format: 'worstaudio[ext=webm]/worstaudio/bestaudio[ext=webm]',
+      extractAudio: true,
+      audioFormat: 'mp3',
+      audioQuality: config.audioQuality,
+      noPlaylist: true,
+      quiet: true,
+      noWarnings: true,
+      noCallHome: true,
+      noCheckCertificate: true,
+      youtubeSkipDashManifest: true,
+      concurrentFragments: config.concurrentFragments,
+      ...(config.proxy && { proxy: config.proxy }),
+      noWriteThumbnail: true,
+      noEmbedThumbnail: true,
+      noWriteInfoJson: true,
+      noWriteDescription: true,
+      noWriteAnnotations: true,
+      noWriteComments: true,
+      noWritePlaylistMetafiles: true,
+      noCheckFormats: true,
+      noContinue: true,
+      bufferSize: config.bufferSize,
+      httpChunkSize: config.httpChunkSize,
+      limitRate: '0',
+      retries: 1,
+      fragmentRetries: 1
+    });
 
-      const allFiles = fs.readdirSync(outputDir);
-      const files = allFiles.filter(f => f.startsWith(`ytdlp_${videoId}.`));
+    const allFiles = fs.readdirSync(outputDir);
+    const files = allFiles.filter(f => f.startsWith(`ytdlp_${videoId}.`));
 
-      console.log(`Looking for files with prefix: ytdlp_${videoId}`);
-      console.log(`Found files:`, files);
-      console.log(`All files in ${outputDir}:`, allFiles.filter(f => f.startsWith('ytdlp_')));
+    console.log(`Looking for files with prefix: ytdlp_${videoId}`);
+    console.log(`Found files:`, files);
+    console.log(`All files in ${outputDir}:`, allFiles.filter(f => f.startsWith('ytdlp_')));
 
-      if (files.length === 0) {
-        throw new Error('Download completed but no file was created');
-      }
-
-      console.log(`${config.label} downloaded:`, files[0]);
-      return `${outputDir}/${files[0]}`;
-
-    } catch (error) {
-      console.error('yt-dlp error:', error);
-      const errorMessage = error.message || error.toString();
-
-      if (errorMessage.includes('Video unavailable')) {
-        throw new Error('VIDEO_UNAVAILABLE: Video unavailable');
-      } else if (errorMessage.includes('Private')) {
-        throw new Error('VIDEO_PRIVATE: Private video');
-      } else if (errorMessage.includes('Sign in')) {
-        throw new Error('VIDEO_AGE_RESTRICTED: Age-restricted');
-      } else if (errorMessage.includes('Premium')) {
-        throw new Error('VIDEO_REQUIRES_AUTH: Requires auth');
-      } else if (errorMessage.includes('copyright')) {
-        throw new Error('VIDEO_COPYRIGHT: Copyright');
-      } else if (errorMessage.includes('429')) {
-        throw new Error('RATE_LIMITED: Rate limited');
-      } else {
-        throw new Error(`DOWNLOAD_FAILED: ${errorMessage}`);
-      }
+    if (files.length === 0) {
+      throw new Error('Download completed but no file was created');
     }
+
+    console.log(`${config.label} downloaded:`, files[0]);
+    return `${outputDir}/${files[0]}`;
+
+  } catch (error) {
+    console.error('yt-dlp error:', error);
+    const errorMessage = error.message || error.toString();
+
+    if (errorMessage.includes('Video unavailable')) {
+      throw new Error('VIDEO_UNAVAILABLE: Video unavailable');
+    } else if (errorMessage.includes('Private')) {
+      throw new Error('VIDEO_PRIVATE: Private video');
+    } else if (errorMessage.includes('Sign in')) {
+      throw new Error('VIDEO_AGE_RESTRICTED: Age-restricted');
+    } else if (errorMessage.includes('Premium')) {
+      throw new Error('VIDEO_REQUIRES_AUTH: Requires auth');
+    } else if (errorMessage.includes('copyright')) {
+      throw new Error('VIDEO_COPYRIGHT: Copyright');
+    } else if (errorMessage.includes('429')) {
+      throw new Error('RATE_LIMITED: Rate limited');
+    } else {
+      throw new Error(`DOWNLOAD_FAILED: ${errorMessage}`);
+    }
+  }
 }
 
 async function downloadDirectVideo(videoUrl, outputPath) {
