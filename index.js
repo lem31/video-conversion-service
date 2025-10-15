@@ -69,6 +69,8 @@ function cleanVideoUrl(url) {
 }
 
 // Remove all aria2 references from config objects and comments
+// Fix: yt-dlp --limit-rate "0" is invalid, must be a positive value or omitted for unlimited speed
+// Remove limitRate: '0' from yt-dlp options
 async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
   const videoId = uuidv4();
   const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
@@ -82,7 +84,6 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     httpChunkSize: '20M',
     proxy: process.env.CDN_PROXY_URL || undefined,
     label: 'ULTIMATE PREMIUM'
-    // aria2 removed
   } : {
     audioQuality: 4,
     concurrentFragments: 16,
@@ -90,7 +91,6 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     httpChunkSize: '10M',
     proxy: undefined,
     label: 'ULTRA-FAST'
-    // aria2 removed
   };
 
   try {
@@ -121,10 +121,8 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       noContinue: true,
       bufferSize: config.bufferSize,
       httpChunkSize: config.httpChunkSize,
-      limitRate: '0',
       retries: 1,
       fragmentRetries: 1
-      // No externalDownloader, no externalDownloaderArgs
     });
 
     const allFiles = fs.readdirSync(outputDir);
