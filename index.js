@@ -80,7 +80,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       // PREMIUM: Maximum speed + better quality
       audioQuality: 2,                   // Excellent quality (2 = very good)
       concurrentFragments: 32,           // 32 parallel downloads
-      externalDownloaderArgs: 'aria2c:-x 32 -s 32 -k 512K -j 32 --max-connection-per-server=16',
+     
       bufferSize: '128K',                // Large buffer
       httpChunkSize: '20M',              // Large chunks
       proxy: process.env.CDN_PROXY_URL || undefined,
@@ -113,7 +113,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
         noCheckCertificate: true,
         youtubeSkipDashManifest: true,
         concurrentFragments: config.concurrentFragments,
-        externalDownloader: 'aria2c',
+      
         externalDownloaderArgs: config.externalDownloaderArgs,
         ...(config.proxy && { proxy: config.proxy }),
         // Skip ALL metadata
