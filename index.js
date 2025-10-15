@@ -102,7 +102,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
 
     await youtubedl(cleanedUrl, {
       output: outputTemplate,
-      format: 'bestaudio/best', // <-- Fix here
+      format: 'bestaudio/best',
       extractAudio: true,
       audioFormat: 'mp3',
       audioQuality: config.audioQuality,
@@ -126,6 +126,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       fragmentRetries: 1
     });
 
+    // Check for output file after yt-dlp runs
     const allFiles = fs.readdirSync(outputDir);
     const files = allFiles.filter(f => f.startsWith(`ytdlp_${videoId}.`));
 
@@ -134,13 +135,17 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     console.log(`All files in ${outputDir}:`, allFiles.filter(f => f.startsWith('ytdlp_')));
 
     if (files.length === 0) {
-      throw new Error('Download completed but no file was created');
+      throw new Error('DOWNLOAD_FAILED: yt-dlp did not produce an output file. The video may be unavailable or the format is not supported.');
     }
 
     console.log(`${config.label} downloaded:`, files[0]);
     return `${outputDir}/${files[0]}`;
 
   } catch (error) {
+    // Improve error reporting if yt-dlp returns empty stderr/stdout
+    if (!error.stderr && !error.stdout) {
+      throw new Error('DOWNLOAD_FAILED: yt-dlp did not return any error details. The video may be unavailable, private, or region-locked.');
+    }
     console.error('yt-dlp error:', error);
     const errorMessage = error.message || error.toString();
 
