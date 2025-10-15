@@ -254,6 +254,17 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
   let shouldCleanupInput = false;
   const startTime = Date.now();
 
+  // Handle file size limit exceeded (413 Payload Too Large)
+  if (req.files && req.files.length > 0) {
+    const file = req.files[0];
+    if (file.size > 500 * 1024 * 1024) { // 500MB limit
+      return res.status(413).json({
+        error: 'File size exceeds 500MB limit.',
+        errorCode: 'FILE_TOO_LARGE'
+      });
+    }
+  }
+
   try {
     // Check for file in req.files array (when using .any())
     const videoFile = req.files && req.files.find(f => f.fieldname === 'video');
@@ -351,6 +362,23 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
 
   } catch (error) {
     console.error('Error:', error);
+    // Handle yt-dlp errors and send 400 for unsupported URLs or formats
+    if (error.message && (
+      error.message.includes('URL_UNSUPPORTED') ||
+      error.message.includes('VIDEO_UNAVAILABLE') ||
+      error.message.includes('VIDEO_PRIVATE') ||
+      error.message.includes('VIDEO_AGE_RESTRICTED') ||
+      error.message.includes('VIDEO_REQUIRES_AUTH') ||
+      error.message.includes('VIDEO_COPYRIGHT') ||
+      error.message.includes('RATE_LIMITED') ||
+      error.message.includes('DOWNLOAD_FAILED')
+    )) {
+      return res.status(400).json({
+        error: error.message,
+        errorCode: error.message.split(':')[0]
+      });
+    }
+
     if (shouldCleanupInput && inputPath && fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
     const videoFile = req.files && req.files.find(f => f.fieldname === 'video');
     if (videoFile && fs.existsSync(videoFile.path)) fs.unlinkSync(videoFile.path);
@@ -373,3 +401,9 @@ app.get('/health', (req, res) => {
 app.listen(port, () => {
   console.log(`ULTIMATE conversion service on port ${port}`);
 });
+
+// No code changes are needed for the Node.js socket/file handle output you posted.
+// This output is normal for Node.js streams and sockets, especially after process exit or cleanup.
+// If you are not seeing errors or crashes, you can ignore these internal details.
+
+// If you experience actual socket/file handle exhaustion (EMFILE errors), set Docker/container ulimits as previously advised.
