@@ -98,8 +98,12 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       const allFiles = fs.readdirSync(outputDir);
       const files = allFiles.filter(f => f.startsWith(`ytdlp_${videoId}.`));
 
+      console.log(`Looking for files with prefix: ytdlp_${videoId}`);
+      console.log(`Found files:`, files);
+      console.log(`All files in ${outputDir}:`, allFiles.filter(f => f.startsWith('ytdlp_')));
+
       if (files.length === 0) {
-        throw new Error('Download failed');
+        throw new Error('Download completed but no file was created');
       }
 
       console.log(`${config.label} downloaded:`, files[0]);
@@ -200,9 +204,9 @@ function convertToMp3Ultimate(inputPath, outputPath, isPremium) {
 
 // Middleware that handles both file uploads and URL-only requests
 const handleUpload = (req, res, next) => {
-  upload.single('video')(req, res, (err) => {
-    // Multer error handling - but allow "no file" scenarios
-    if (err && err.code !== 'LIMIT_UNEXPECTED_FILE') {
+  upload.any()(req, res, (err) => {
+    // Multer error handling
+    if (err) {
       return res.status(400).json({ error: err.message, errorCode: 'UPLOAD_ERROR' });
     }
     next();
@@ -212,14 +216,19 @@ const handleUpload = (req, res, next) => {
 app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
   const premium = isPremiumUser(req);
   console.log(`ULTIMATE conversion request - ${premium ? 'PREMIUM' : 'STANDARD'} user`);
+  console.log('Request body:', req.body);
+  console.log('Request files:', req.files);
 
   let inputPath;
   let shouldCleanupInput = false;
   const startTime = Date.now();
 
   try {
-    if (req.file) {
-      inputPath = req.file.path;
+    // Check for file in req.files array (when using .any())
+    const videoFile = req.files && req.files.find(f => f.fieldname === 'video');
+
+    if (videoFile) {
+      inputPath = videoFile.path;
     } else if (req.body.videoUrl) {
       const videoUrl = req.body.videoUrl;
       shouldCleanupInput = true;
@@ -294,9 +303,9 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
     // Cleanup
     fs.unlinkSync(outputPath);
     if (shouldCleanupInput && fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    if (videoFile && fs.existsSync(videoFile.path)) fs.unlinkSync(videoFile.path);
 
-    const filename = req.file ? `${req.file.originalname.split('.')[0]}.mp3` : `audio_${outputId}.mp3`;
+    const filename = videoFile ? `${videoFile.originalname.split('.')[0]}.mp3` : `audio_${outputId}.mp3`;
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`Total: ${elapsed}s (${premium ? 'PREMIUM' : 'STANDARD'})`);
 
@@ -312,7 +321,8 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
   } catch (error) {
     console.error('Error:', error);
     if (shouldCleanupInput && inputPath && fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    const videoFile = req.files && req.files.find(f => f.fieldname === 'video');
+    if (videoFile && fs.existsSync(videoFile.path)) fs.unlinkSync(videoFile.path);
 
     res.status(500).json({
       error: error.message || 'Server error',
