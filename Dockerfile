@@ -6,7 +6,7 @@ RUN apt-get update \
   && apt-get clean
 
 # Install yt-dlp via pip (more reliable than apt)
-  RUN pip3 install --no-cache-dir --upgrade yt-dlp
+RUN apk add --no-cache ffmpeg yt-dlp python3 py3-pip
 
    # Verify yt-dlp installation and show version
   RUN yt-dlp --version
