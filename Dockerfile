@@ -9,6 +9,9 @@ RUN apt-get install -y ffmpeg python3 python3-pip yt-dlp
 # Clean up
 RUN apt-get clean
 
+# Ensure /tmp exists and is writable for temp files
+RUN mkdir -p /tmp && chmod 777 /tmp
+
 WORKDIR /app
 
 # Copy package files
