@@ -72,6 +72,9 @@ function cleanVideoUrl(url) {
 // Fix: yt-dlp --limit-rate "0" is invalid, must be a positive value or omitted for unlimited speed
 // Remove limitRate: '0' from yt-dlp options
 // Fix: Remove deprecated yt-dlp options: --no-call-home, --youtube-skip-dash-manifest, --no-write-annotations
+// Fix: Use a more compatible yt-dlp format string for YouTube audio extraction
+// Replace 'worstaudio[ext=webm]/worstaudio/bestaudio[ext=webm]' with 'bestaudio/best'
+
 async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
   const videoId = uuidv4();
   const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
@@ -99,7 +102,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
 
     await youtubedl(cleanedUrl, {
       output: outputTemplate,
-      format: 'worstaudio[ext=webm]/worstaudio/bestaudio[ext=webm]',
+      format: 'bestaudio/best', // <-- Fix here
       extractAudio: true,
       audioFormat: 'mp3',
       audioQuality: config.audioQuality,
@@ -121,7 +124,6 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       httpChunkSize: config.httpChunkSize,
       retries: 1,
       fragmentRetries: 1
-      // Removed: noCallHome, youtubeSkipDashManifest, noWriteAnnotations
     });
 
     const allFiles = fs.readdirSync(outputDir);
