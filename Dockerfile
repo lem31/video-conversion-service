@@ -21,6 +21,11 @@ RUN npm install
 
 COPY . .
 
+# If your main file is index.js, make sure it exists in /app after COPY . .
+# If your entry point is not index.js, update CMD accordingly:
+# CMD ["npm", "start"]  # if "start": "node index.js" in package.json
+# Or use: CMD ["node", "index.js"] if you want to run index.js directly
+
 EXPOSE 8080
 
 CMD ["npm", "start"]
