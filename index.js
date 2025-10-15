@@ -75,55 +75,25 @@ function cleanVideoUrl(url) {
 // Fix: Use a more compatible yt-dlp format string for YouTube audio extraction
 // Replace 'worstaudio[ext=webm]/worstaudio/bestaudio[ext=webm]' with 'bestaudio/best'
 
+const ffmpegPath = require('ffmpeg-static');
+process.env.FFMPEG_PATH = ffmpegPath;
+
 async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
   const videoId = uuidv4();
   const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
 
   const cleanedUrl = cleanVideoUrl(videoUrl);
 
-  const config = isPremium ? {
-    audioQuality: 2,
-    concurrentFragments: 32,
-    bufferSize: '128K',
-    httpChunkSize: '20M',
-    proxy: process.env.CDN_PROXY_URL || undefined,
-    label: 'ULTIMATE PREMIUM'
-  } : {
-    audioQuality: 4,
-    concurrentFragments: 16,
-    bufferSize: '64K',
-    httpChunkSize: '10M',
-    proxy: undefined,
-    label: 'ULTRA-FAST'
-  };
-
   try {
-    console.log(`${config.label} download:`, cleanedUrl);
+    console.log(`DEBUG download:`, cleanedUrl);
 
     await youtubedl(cleanedUrl, {
       output: outputTemplate,
-      format: 'bestaudio/best',
       extractAudio: true,
       audioFormat: 'mp3',
-      audioQuality: config.audioQuality,
-      noPlaylist: true,
-      quiet: true,
-      noWarnings: true,
-      noCheckCertificate: true,
-      concurrentFragments: config.concurrentFragments,
-      ...(config.proxy && { proxy: config.proxy }),
-      noWriteThumbnail: true,
-      noEmbedThumbnail: true,
-      noWriteInfoJson: true,
-      noWriteDescription: true,
-      noWriteComments: true,
-      noWritePlaylistMetafiles: true,
-      noCheckFormats: true,
-      noContinue: true,
-      bufferSize: config.bufferSize,
-      httpChunkSize: config.httpChunkSize,
-      retries: 1,
-      fragmentRetries: 1
+      format: 'bestaudio[ext=webm]/bestaudio/best',
+      verbose: true
+      // Remove quiet, noWarnings, noCheckCertificate, noCheckFormats, noContinue for debugging
     });
 
     // Check for output file after yt-dlp runs
@@ -132,13 +102,12 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
 
     console.log(`Looking for files with prefix: ytdlp_${videoId}`);
     console.log(`Found files:`, files);
-    console.log(`All files in ${outputDir}:`, allFiles.filter(f => f.startsWith('ytdlp_')));
 
     if (files.length === 0) {
       throw new Error('DOWNLOAD_FAILED: yt-dlp did not produce an output file. The video may be unavailable or the format is not supported.');
     }
 
-    console.log(`${config.label} downloaded:`, files[0]);
+    console.log(`DEBUG downloaded:`, files[0]);
     return `${outputDir}/${files[0]}`;
 
   } catch (error) {
