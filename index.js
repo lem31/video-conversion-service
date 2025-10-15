@@ -32,10 +32,49 @@ function isSupportedVideoUrl(url) {
   } catch { return false; }
 }
 
+// Clean URL by removing playlist, radio, and other extra parameters
+function cleanVideoUrl(url) {
+  try {
+    const urlObj = new URL(url);
+
+    // For YouTube, keep only the 'v' parameter (video ID) and 't' (timestamp if present)
+    if (urlObj.hostname.includes('youtube.com')) {
+      const videoId = urlObj.searchParams.get('v');
+      const timestamp = urlObj.searchParams.get('t');
+      if (videoId) {
+        let cleanUrl = `https://www.youtube.com/watch?v=${videoId}`;
+        if (timestamp) {
+          cleanUrl += `&t=${timestamp}`;
+        }
+        console.log('Cleaned YouTube URL:', url, '->', cleanUrl);
+        return cleanUrl;
+      }
+    }
+
+    // For youtu.be, it's already clean (format: youtu.be/VIDEO_ID)
+    if (urlObj.hostname.includes('youtu.be')) {
+      const pathParts = urlObj.pathname.split('/').filter(Boolean);
+      if (pathParts.length > 0) {
+        const cleanUrl = `https://youtu.be/${pathParts[0]}`;
+        console.log('Cleaned youtu.be URL:', url, '->', cleanUrl);
+        return cleanUrl;
+      }
+    }
+
+    // For other platforms, return as-is
+    return url;
+  } catch {
+    return url;
+  }
+}
+
 // ULTIMATE SPEED: Premium users get maximum speed with MP3 conversion during download
 async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     const videoId = uuidv4();
     const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
+
+    // Clean the URL to remove playlist/radio parameters
+    const cleanedUrl = cleanVideoUrl(videoUrl);
 
     const config = isPremium ? {
       // PREMIUM: Maximum speed + better quality
@@ -58,10 +97,10 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     };
 
     try {
-      console.log(`${config.label} download:`, videoUrl);
+      console.log(`${config.label} download:`, cleanedUrl);
 
       // ULTIMATE: Convert to MP3 DURING download (eliminates separate conversion!)
-      await youtubedl(videoUrl, {
+      await youtubedl(cleanedUrl, {
         output: outputTemplate,
         format: 'worstaudio[ext=webm]/worstaudio/bestaudio[ext=webm]',
         extractAudio: true,
