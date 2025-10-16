@@ -79,8 +79,6 @@ function cleanVideoUrl(input) {
   }
 }
 
-// New helper to run yt-dlp via child_process.spawn and capture output
-const { spawn } = require('child_process');
 
 function runYtDlp(args, cwd = '/tmp') {
   return new Promise((resolve, reject) => {
@@ -225,7 +223,6 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     }
   }
 }
-
 async function downloadDirectVideo(videoUrl, outputPath) {
   try {
     const response = await axios({
