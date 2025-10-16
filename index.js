@@ -79,7 +79,6 @@ function cleanVideoUrl(input) {
   }
 }
 
-
 function runYtDlp(args, cwd = '/tmp') {
   return new Promise((resolve, reject) => {
     const proc = spawn('yt-dlp', args, { cwd });
@@ -207,6 +206,16 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
   } catch (error) {
     console.error('yt-dlp error:', error);
     const msg = error.message || String(error);
+
+    // New: detect "Sign in to confirm you're not a bot" message and instruct about cookies
+    if (msg.includes('Sign in to confirm') || msg.includes('Sign in') && msg.includes('bot')) {
+      // instruct the caller how to provide cookies
+      throw new Error(
+        'VIDEO_REQUIRES_COOKIES: This video requires authenticated cookies (Sign in to confirm you are not a bot). ' +
+        'Provide a cookies.txt file and set the YTDLP_COOKIES environment variable to its path, ' +
+        'or use --cookies-from-browser locally. See: https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp'
+      );
+    }
 
     if (msg.includes('This video is private') || msg.includes('Private video')) {
       throw new Error('VIDEO_PRIVATE: Private video');
