@@ -88,41 +88,43 @@ try {
 async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
   const videoId = uuidv4();
   const outputTemplate = `${outputDir}/ytdlp_${videoId}.%(ext)s`;
-
   const cleanedUrl = cleanVideoUrl(videoUrl);
 
   try {
     console.log(`DEBUG download:`, cleanedUrl);
 
-    await youtubedl(cleanedUrl, {
+    const result = await youtubedl(cleanedUrl, {
       output: outputTemplate,
       extractAudio: true,
       audioFormat: 'mp3',
-      format: 'bestaudio[ext=webm]/bestaudio/best',
+      format: 'bestaudio/best',
+      noPlaylist: true,
       verbose: true
-      // Remove quiet, noWarnings, noCheckCertificate, noCheckFormats, noContinue for debugging
     });
+
+    console.log('yt-dlp stdout:', result.stdout || '[no stdout]');
+    console.log('yt-dlp stderr:', result.stderr || '[no stderr]');
 
     // Check for output file after yt-dlp runs
     const allFiles = fs.readdirSync(outputDir);
-    const files = allFiles.filter(f => f.startsWith(`ytdlp_${videoId}.`));
+    const files = allFiles.filter(f =>
+      f.startsWith(`ytdlp_${videoId}.`) &&
+      (f.endsWith('.mp3') || f.endsWith('.webm') || f.endsWith('.m4a'))
+    );
 
     console.log(`Looking for files with prefix: ytdlp_${videoId}`);
     console.log(`Found files:`, files);
 
     if (files.length === 0) {
-      throw new Error('DOWNLOAD_FAILED: yt-dlp did not produce an output file. The video may be unavailable or the format is not supported.');
+      throw new Error('DOWNLOAD_FAILED: yt-dlp did not produce an output file. The video may be unavailable, region-locked, or require login.');
     }
 
     console.log(`DEBUG downloaded:`, files[0]);
     return `${outputDir}/${files[0]}`;
 
   } catch (error) {
-    // Improve error reporting if yt-dlp returns empty stderr/stdout
-    if (!error.stderr && !error.stdout) {
-      throw new Error('DOWNLOAD_FAILED: yt-dlp did not return any error details. The video may be unavailable, private, or region-locked.');
-    }
     console.error('yt-dlp error:', error);
+
     const errorMessage = error.message || error.toString();
 
     if (errorMessage.includes('Video unavailable')) {
@@ -142,6 +144,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     }
   }
 }
+
 
 async function downloadDirectVideo(videoUrl, outputPath) {
   try {
