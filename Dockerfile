@@ -22,8 +22,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 # Upgrade pip tooling then install yt-dlp via pip
-RUN pip3 install --no-cache-dir -U pip setuptools wheel && \
-    pip3 install --no-cache-dir -U yt-dlp
+# REPLACED: pip installs caused "externally-managed-environment" errors on some images.
+# Instead download the yt-dlp standalone binary and make it executable.
+RUN curl -fsSL -o /usr/local/bin/yt-dlp \
+      https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+  && chmod +x /usr/local/bin/yt-dlp \
+  && /usr/local/bin/yt-dlp --version || true
 
 # Ensure yt-dlp is in PATH (pip usually installs to /usr/local/bin)
 ENV PATH="/usr/local/bin:$PATH"
