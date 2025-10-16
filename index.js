@@ -93,14 +93,15 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
   try {
     console.log(`DEBUG download:`, cleanedUrl);
 
-    const result = await youtubedl(cleanedUrl, {
-      output: outputTemplate,
-      extractAudio: true,
-      audioFormat: 'mp3',
-      format: 'bestaudio/best',
-      noPlaylist: true,
-      verbose: true
-    });
+ const result = await youtubedl(cleanedUrl, {
+  output: outputTemplate,
+  extractAudio: true,
+  audioFormat: 'mp3',
+  format: 'bestaudio/best',
+  noPlaylist: true,
+  verbose: true,
+  proxy: 'http://199.188.207.30' 
+});
 
     console.log('yt-dlp stdout:', result.stdout || '[no stdout]');
     console.log('yt-dlp stderr:', result.stderr || '[no stderr]');
