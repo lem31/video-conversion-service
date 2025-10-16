@@ -120,6 +120,18 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       throw new Error('DOWNLOAD_FAILED: yt-dlp did not produce an output file. The video may be unavailable, region-locked, or require login.');
     }
 
+    if (files.length === 0) {
+  throw new Error('DOWNLOAD_FAILED: yt-dlp did not produce an output file.');
+}
+
+let finalPath = `${outputDir}/${files[0]}`;
+if (!finalPath.endsWith('.mp3')) {
+  const mp3Path = finalPath.replace(/\.(webm|m4a)$/, '.mp3');
+  await convertToMp3Ultimate(finalPath, mp3Path, isPremium);
+  fs.unlinkSync(finalPath);
+  finalPath = mp3Path;
+}
+
     console.log(`DEBUG downloaded:`, files[0]);
     return `${outputDir}/${files[0]}`;
 
