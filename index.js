@@ -25,48 +25,94 @@ function isPremiumUser(req) {
 }
 
 function isSupportedVideoUrl(url) {
-  const supportedDomains = ['youtube.com', 'youtu.be', 'dailymotion.com'];
   try {
-    const urlObj = new URL(url);
-    return supportedDomains.some(domain => urlObj.hostname.includes(domain));
-  } catch { return false; }
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    return host.includes('youtube.com') || host.includes('youtu.be') || host.includes('vimeo.com') || host.includes('dailymotion.com');
+  } catch {
+    return false;
+  }
 }
 
 // Clean URL by removing playlist, radio, and other extra parameters
-function cleanVideoUrl(url) {
+function cleanVideoUrl(input) {
   try {
-    const urlObj = new URL(url);
+    const raw = String(input).trim();
+    if (!raw) return raw;
+    // accept plain id
+    if (/^[A-Za-z0-9_-]{11}$/.test(raw)) return `https://www.youtube.com/watch?v=${raw}`;
 
-    // For YouTube, keep only the 'v' parameter (video ID) and 't' (timestamp if present)
-    if (urlObj.hostname.includes('youtube.com')) {
-      const videoId = urlObj.searchParams.get('v');
-      const timestamp = urlObj.searchParams.get('t');
-      if (videoId) {
-        let cleanUrl = `https://www.youtube.com/watch?v=${videoId}`;
-        if (timestamp) {
-          cleanUrl += `&t=${timestamp}`;
-        }
-        console.log('Cleaned YouTube URL:', url, '->', cleanUrl);
-        return cleanUrl;
-      }
+    const urlObj = new URL(raw, 'https://www.youtube.com');
+    const host = urlObj.hostname.toLowerCase();
+
+    // youtu.be short links
+    if (host === 'youtu.be') {
+      const id = urlObj.pathname.replace(/^\/+/, '').split('/')[0];
+      if (id) return `https://www.youtube.com/watch?v=${id}`;
+      return raw;
     }
 
-    // For youtu.be, it's already clean (format: youtu.be/VIDEO_ID)
-    if (urlObj.hostname.includes('youtu.be')) {
-      const pathParts = urlObj.pathname.split('/').filter(Boolean);
-      if (pathParts.length > 0) {
-        const cleanUrl = `https://youtu.be/${pathParts[0]}`;
-        console.log('Cleaned youtu.be URL:', url, '->', cleanUrl);
-        return cleanUrl;
-      }
+    // youtube.com: keep only v param if present, otherwise try /embed/ or /v/
+    if (host.endsWith('youtube.com') || host.includes('youtube')) {
+      const v = urlObj.searchParams.get('v');
+      if (v) return `https://www.youtube.com/watch?v=${v}`;
+      const parts = urlObj.pathname.split('/').filter(Boolean);
+      const embedIdx = parts.indexOf('embed');
+      if (embedIdx !== -1 && parts[embedIdx + 1]) return `https://www.youtube.com/watch?v=${parts[embedIdx + 1]}`;
+      const vIdx = parts.indexOf('v');
+      if (vIdx !== -1 && parts[vIdx + 1]) return `https://www.youtube.com/watch?v=${parts[vIdx + 1]}`;
+      // fallback: remove list/start_radio/etc
+      const params = new URLSearchParams();
+      if (urlObj.searchParams.get('t')) params.set('t', urlObj.searchParams.get('t'));
+      const base = urlObj.origin + urlObj.pathname;
+      return params.toString() ? `${base}?${params.toString()}` : base;
     }
 
-    // For other platforms, return as-is
-    return url;
+    // Vimeo / Dailymotion: return cleaned path-only form (no query extras)
+    if (host.includes('vimeo.com') || host.includes('dailymotion.com')) {
+      return `${urlObj.origin}${urlObj.pathname}`;
+    }
+
+    return raw;
   } catch {
-    return url;
+    return input;
   }
 }
+
+// New helper to run yt-dlp via child_process.spawn and capture output
+const { spawn } = require('child_process');
+
+function runYtDlp(args, cwd = '/tmp') {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('yt-dlp', args, { cwd });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', chunk => {
+      const s = chunk.toString();
+      stdout += s;
+      // optional: console.log(s);
+    });
+
+    proc.stderr.on('data', chunk => {
+      const s = chunk.toString();
+      stderr += s;
+      // optional: console.error(s);
+    });
+
+    proc.on('error', err => reject(err));
+    proc.on('close', code => {
+      if (code === 0) return resolve({ stdout, stderr });
+      const err = new Error(`yt-dlp exit ${code}: ${stderr || stdout}`);
+      err.code = code;
+      err.stdout = stdout;
+      err.stderr = stderr;
+      reject(err);
+    });
+  });
+}
+
 
 // Remove all aria2 references from config objects and comments
 // Fix: yt-dlp --limit-rate "0" is invalid, must be a positive value or omitted for unlimited speed
@@ -91,73 +137,94 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
   const cleanedUrl = cleanVideoUrl(videoUrl);
 
   try {
-    console.log(`DEBUG download:`, cleanedUrl);
+    console.log('DEBUG download:', cleanedUrl);
 
- const result = await youtubedl(cleanedUrl, {
-  output: outputTemplate,
-  extractAudio: true,
-  audioFormat: 'mp3',
-  format: 'bestaudio/best',
-  noPlaylist: true,
-  verbose: true,
-  proxy: 'http://199.188.207.30' 
-});
+    // assemble base args
+    const baseArgs = [
+      '--no-playlist',
+      '-x', '--audio-format', 'mp3',
+      '--format', 'bestaudio/best',
+      '--output', outputTemplate,
+      '--no-mtime', // avoid touching file mtime
+      cleanedUrl
+    ];
 
-    console.log('yt-dlp stdout:', result.stdout || '[no stdout]');
-    console.log('yt-dlp stderr:', result.stderr || '[no stderr]');
+    // optional cookie or proxy from env
+    const extraArgs = [];
+    if (process.env.YTDLP_COOKIES) extraArgs.push('--cookies', process.env.YTDLP_COOKIES);
+    if (process.env.YTDLP_PROXY) extraArgs.push('--proxy', process.env.YTDLP_PROXY);
 
-    // Check for output file after yt-dlp runs
+    // try first attempt
+    try {
+      await runYtDlp([...baseArgs, ...extraArgs], '/tmp');
+    } catch (firstErr) {
+      console.warn('yt-dlp first attempt failed:', firstErr.message);
+      // retry with geo-bypass and retries
+      const fallback = [
+        '--no-playlist',
+        '-x', '--audio-format', 'mp3',
+        '--format', 'bestaudio/best',
+        '--geo-bypass',
+        '--retries', '3',
+        '--fragment-retries', '3',
+        '--output', outputTemplate,
+        cleanedUrl
+      ];
+      if (process.env.YTDLP_COOKIES) fallback.push('--cookies', process.env.YTDLP_COOKIES);
+      if (process.env.YTDLP_PROXY) fallback.push('--proxy', process.env.YTDLP_PROXY);
+
+      await runYtDlp(fallback, '/tmp');
+    }
+
+    // find generated file
     const allFiles = fs.readdirSync(outputDir);
     const files = allFiles.filter(f =>
       f.startsWith(`ytdlp_${videoId}.`) &&
-      (f.endsWith('.mp3') || f.endsWith('.webm') || f.endsWith('.m4a'))
+      (f.endsWith('.mp3') || f.endsWith('.webm') || f.endsWith('.m4a') || f.endsWith('.wav') || f.endsWith('.aac'))
     );
 
     console.log(`Looking for files with prefix: ytdlp_${videoId}`);
-    console.log(`Found files:`, files);
+    console.log('Found files:', files);
 
-    if (files.length === 0) {
-      throw new Error('DOWNLOAD_FAILED: yt-dlp did not produce an output file. The video may be unavailable, region-locked, or require login.');
+    if (!files || files.length === 0) {
+      throw new Error('DOWNLOAD_FAILED: yt-dlp did not produce an output file. The video may be unavailable, region-locked, require login, or yt-dlp failed.');
     }
 
-    if (files.length === 0) {
-  throw new Error('DOWNLOAD_FAILED: yt-dlp did not produce an output file.');
-}
+    // prefer mp3 if already produced, otherwise convert first matched file to mp3
+    let finalFile = files.find(f => f.endsWith('.mp3')) || files[0];
+    let finalPath = `${outputDir}/${finalFile}`;
 
-let finalPath = `${outputDir}/${files[0]}`;
-if (!finalPath.endsWith('.mp3')) {
-  const mp3Path = finalPath.replace(/\.(webm|m4a)$/, '.mp3');
-  await convertToMp3Ultimate(finalPath, mp3Path, isPremium);
-  fs.unlinkSync(finalPath);
-  finalPath = mp3Path;
-}
+    if (!finalPath.endsWith('.mp3')) {
+      // convert to mp3
+      const mp3Path = finalPath.replace(/\.(webm|m4a|wav|aac)$/, '.mp3');
+      await convertToMp3Ultimate(finalPath, mp3Path, isPremium);
+      // remove original
+      try { fs.unlinkSync(finalPath); } catch (e) { /* ignore */ }
+      finalPath = mp3Path;
+    }
 
-    console.log(`DEBUG downloaded:`, files[0]);
-    return `${outputDir}/${files[0]}`;
+    console.log('DEBUG downloaded:', finalPath);
+    return finalPath;
 
   } catch (error) {
     console.error('yt-dlp error:', error);
+    const msg = error.message || String(error);
 
-    const errorMessage = error.message || error.toString();
-
-    if (errorMessage.includes('Video unavailable')) {
-      throw new Error('VIDEO_UNAVAILABLE: Video unavailable');
-    } else if (errorMessage.includes('Private')) {
+    if (msg.includes('This video is private') || msg.includes('Private video')) {
       throw new Error('VIDEO_PRIVATE: Private video');
-    } else if (errorMessage.includes('Sign in')) {
-      throw new Error('VIDEO_AGE_RESTRICTED: Age-restricted');
-    } else if (errorMessage.includes('Premium')) {
-      throw new Error('VIDEO_REQUIRES_AUTH: Requires auth');
-    } else if (errorMessage.includes('copyright')) {
-      throw new Error('VIDEO_COPYRIGHT: Copyright');
-    } else if (errorMessage.includes('429')) {
+    } else if (msg.includes('Sign in') || msg.includes('Login required') || msg.includes('age')) {
+      throw new Error('VIDEO_AGE_RESTRICTED: Age-restricted or login required');
+    } else if (msg.includes('404') || msg.includes('not found')) {
+      throw new Error('VIDEO_UNAVAILABLE: Video unavailable');
+    } else if (msg.includes('403') || msg.includes('copyright')) {
+      throw new Error('VIDEO_COPYRIGHT: Copyright or access denied');
+    } else if (msg.includes('429') || msg.toLowerCase().includes('rate')) {
       throw new Error('RATE_LIMITED: Rate limited');
     } else {
-      throw new Error(`DOWNLOAD_FAILED: ${errorMessage}`);
+      throw new Error(`DOWNLOAD_FAILED: ${msg}`);
     }
   }
 }
-
 
 async function downloadDirectVideo(videoUrl, outputPath) {
   try {
