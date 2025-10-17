@@ -310,8 +310,8 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
 
     let lastYtdlpError = null;
 
-    // OPTIMIZATION: Try piped fast path first if enabled
-    const enablePipe = process.env.ENABLE_PIPE !== '0';
+    // OPTIMIZATION: Try piped fast path first if enabled (disabled by default due to incomplete downloads)
+    const enablePipe = process.env.ENABLE_PIPE === '1'; // Must explicitly enable with ENABLE_PIPE=1
     if (enablePipe) {
       const pipedMp3Path = `${outputDir}/ytdlp_${videoId}.mp3`;
       const ytExtraArgsForPipe = [];
@@ -897,7 +897,7 @@ app.listen(port, () => {
   console.log('  - Cookies:', process.env.YTDLP_COOKIES ? 'ENABLED' : 'DISABLED');
   console.log('  - Proxy:', process.env.YTDLP_PROXY ? 'ENABLED' : 'DISABLED');
   console.log('  - Skip metadata probe:', process.env.SKIP_METADATA_PROBE || 'auto (shorts only)');
-  console.log('  - Pipe mode:', process.env.ENABLE_PIPE !== '0' ? 'ENABLED' : 'DISABLED');
+  console.log('  - Pipe mode:', process.env.ENABLE_PIPE === '1' ? 'ENABLED' : 'DISABLED (recommended)');
   console.log('  - Concurrent downloads (premium):', MAX_CONCURRENT_PREMIUM);
   console.log('  - Concurrent downloads (standard):', MAX_CONCURRENT_STANDARD);
   console.log('\n🚀 Ready! Optimized for speed.\n');
