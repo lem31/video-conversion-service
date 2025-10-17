@@ -14,13 +14,13 @@ const port = process.env.PORT || 8080;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// --- New: prefer tmpfs for intermediate files when available ---
+// prefer tmpfs for intermediate files when available (env YTDLP_TMP_DIR can override)
 const PREFERRED_TMP_DIR = process.env.YTDLP_TMP_DIR
   || (process.platform !== 'win32' && fs.existsSync('/dev/shm') ? '/dev/shm' : '/tmp');
 console.log('Preferred tmp dir for yt-dlp/ffmpeg:', PREFERRED_TMP_DIR);
 
 const upload = multer({
-  dest: '/tmp/',
+  dest: PREFERRED_TMP_DIR,
   limits: { fileSize: 500 * 1024 * 1024 }
 });
 
@@ -904,7 +904,7 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
         // If not MP3 or download failed, fall through to error handling below
       } else {
         const videoId = uuidv4();
-        inputPath = `/tmp/direct_${videoId}.video`;
+        inputPath = path.join(PREFERRED_TMP_DIR, `direct_${videoId}.video`);
         await downloadDirectVideo(videoUrl, inputPath);
       }
     } else {
@@ -915,7 +915,7 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
     }
 
     const outputId = uuidv4();
-    const outputPath = `/tmp/converted_${outputId}.mp3`;
+    const outputPath = path.join(PREFERRED_TMP_DIR, `converted_${outputId}.mp3`);
 
     await convertToMp3Ultimate(inputPath, outputPath, premium);
 
