@@ -373,9 +373,10 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     }
   }
 }
+
 async function downloadDirectVideo(videoUrl, outputPath) {
   try {
-    const response = await axios({
+    const axiosOptions = {
       method: 'GET',
       url: videoUrl,
       responseType: 'stream',
@@ -383,7 +384,28 @@ async function downloadDirectVideo(videoUrl, outputPath) {
       maxRedirects: 5,
       maxContentLength: Infinity,
       maxBodyLength: Infinity
-    });
+    };
+
+    // If YTDLP_PROXY is set and parsed successfully, tell axios to use it
+    if (PROXY_CONFIG) {
+      // axios expects numeric port
+      axiosOptions.proxy = {
+        protocol: PROXY_CONFIG.protocol,
+        host: PROXY_CONFIG.host,
+        port: Number(PROXY_CONFIG.port)
+      };
+      if (PROXY_CONFIG.auth) {
+        axiosOptions.proxy.auth = {
+          username: PROXY_CONFIG.auth.username,
+          password: PROXY_CONFIG.auth.password
+        };
+      }
+    } else if (process.env.HTTP_PROXY || process.env.HTTPS_PROXY) {
+      // If system HTTP(S)_PROXY env vars are set, axios will use them automatically in many environments;
+      // we leave them alone so container-level proxy can work without code changes.
+    }
+
+    const response = await axios(axiosOptions);
 
     const writer = fs.createWriteStream(outputPath);
     response.data.pipe(writer);
@@ -501,6 +523,35 @@ function computeCacheKey(url, opts = {}) {
   hash.update(String(url));
   if (opts.quality) hash.update(String(opts.quality));
   return hash.digest('hex');
+}
+
+// --- New helper: parse and validate YTDLP_PROXY env ---
+function parseProxyEnv() {
+  const raw = process.env.YTDLP_PROXY;
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    // infer a port if not provided (warn)
+    let port = u.port;
+    if (!port) {
+      const inferred = u.protocol === 'http:' ? '80' : (u.protocol === 'https:' ? '443' : '');
+      console.warn(`YTDLP_PROXY provided without port; inferring port ${inferred}. It's recommended to include the explicit port in the proxy URL.`);
+      port = inferred;
+    }
+    const auth = u.username ? { username: decodeURIComponent(u.username), password: decodeURIComponent(u.password) } : null;
+    return { raw, protocol: u.protocol.replace(':', ''), host: u.hostname, port: port, auth };
+  } catch (err) {
+    console.warn('Invalid YTDLP_PROXY value:', raw, err.message);
+    return null;
+  }
+}
+
+const PROXY_CONFIG = parseProxyEnv();
+// Masked log so secret parts aren't printed
+if (PROXY_CONFIG) {
+  console.log(`Proxy configured: ${PROXY_CONFIG.protocol}://${PROXY_CONFIG.host}:${PROXY_CONFIG.port}`);
+} else {
+  console.log('No proxy configured via YTDLP_PROXY');
 }
 
 app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
