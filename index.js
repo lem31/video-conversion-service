@@ -827,14 +827,18 @@ function releaseDownloadSlot() {
 
 // --- New helper: parse and validate YTDLP_PROXY env (supports optional RPXY) ---
 function parseProxyEnv() {
-  // If RPXY is explicitly enabled, prefer its URL (reverse-proxy endpoint you deployed)
+  // Prefer rpxy URL when explicitly enabled, otherwise fall back to YTDLP_PROXY.
   const useRpxy = String(process.env.YTDLP_USE_RPXY || '').trim() === '1';
   const rpxyRaw = process.env.YTDLP_RPXY_URL;
-  const raw = useRpxy && rpxyRaw ? rpxyRaw : process.env.YTDLP_PROXY;
-  if (!raw) return null;
+  const rawInput = useRpxy && rpxyRaw ? rpxyRaw : process.env.YTDLP_PROXY;
+  if (!rawInput) return null;
+
+  const raw = String(rawInput).trim();
+  // Accept hostnames without http/https by defaulting to https://
+  const candidate = (raw.startsWith('http://') || raw.startsWith('https://')) ? raw : `https://${raw}`;
+
   try {
-    const u = new URL(raw);
-    // infer a port if not provided (warn)
+    const u = new URL(candidate);
     let port = u.port;
     if (!port) {
       const inferred = u.protocol === 'http:' ? '80' : (u.protocol === 'https:' ? '443' : '');
@@ -843,9 +847,9 @@ function parseProxyEnv() {
     }
     const auth = u.username ? { username: decodeURIComponent(u.username), password: decodeURIComponent(u.password) } : null;
     const which = useRpxy && rpxyRaw ? 'rpxy' : 'proxy';
-    return { raw, protocol: u.protocol.replace(':', ''), host: u.hostname, port: port, auth, which };
+    return { raw: candidate, protocol: u.protocol.replace(':', ''), host: u.hostname, port, auth, which };
   } catch (err) {
-    console.warn('Invalid proxy value:', raw, err.message);
+    console.warn('Invalid proxy value:', rawInput, err.message);
     return null;
   }
 }
@@ -1113,7 +1117,7 @@ app.listen(port, () => {
   `);
   console.log('Configuration:');
   console.log('  - Cookies:', process.env.YTDLP_COOKIES ? 'ENABLED' : 'DISABLED (optional)');
-  console.log('  - Proxy:', process.env.YTDLP_PROXY ? 'ENABLED' : 'DISABLED (optional)');
+  console.log('  - Proxy:', PROXY_CONFIG ? `${PROXY_CONFIG.which || 'proxy'}: ENABLED` : 'DISABLED (optional)');
   console.log('  - Supported platforms: YouTube, TikTok, Instagram, Twitter/X');
   console.log('  - Fallback layers: 4 (Web → TV Embedded → Safari → Web Embedded)');
   console.log('  - PO Token bypass: ALL LAYERS');
