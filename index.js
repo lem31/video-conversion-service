@@ -78,7 +78,6 @@ function cleanVideoUrl(input) {
     return input;
   }
 }
-
 function runYtDlp(args, cwd = '/tmp') {
   return new Promise((resolve, reject) => {
     const proc = spawn('yt-dlp', args, { cwd });
@@ -148,7 +147,21 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
 
     // optional cookie or proxy from env
     const extraArgs = [];
-    if (process.env.YTDLP_COOKIES) extraArgs.push('--cookies', process.env.YTDLP_COOKIES);
+
+    // Priority 1: Use cookies.txt file if YTDLP_COOKIES env var is set
+    if (process.env.YTDLP_COOKIES) {
+      extraArgs.push('--cookies', process.env.YTDLP_COOKIES);
+      console.log('Using cookies from file:', process.env.YTDLP_COOKIES);
+    }
+    // Priority 2: Auto-extract cookies from browser (Chrome as default)
+    else {
+      // Try to use browser cookies - this fixes "Sign in to confirm you're not a bot" errors
+      // Default to Chrome, but can be overridden with YTDLP_BROWSER env var (chrome, firefox, edge, safari, etc.)
+      const browser = process.env.YTDLP_BROWSER || 'chrome';
+      extraArgs.push('--cookies-from-browser', browser);
+      console.log(`Using cookies from ${browser} browser`);
+    }
+
     if (process.env.YTDLP_PROXY) extraArgs.push('--proxy', process.env.YTDLP_PROXY);
 
     // try first attempt
@@ -167,7 +180,15 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
         '--output', outputTemplate,
         cleanedUrl
       ];
-      if (process.env.YTDLP_COOKIES) fallback.push('--cookies', process.env.YTDLP_COOKIES);
+
+      // Add same cookie logic to fallback
+      if (process.env.YTDLP_COOKIES) {
+        fallback.push('--cookies', process.env.YTDLP_COOKIES);
+      } else {
+        const browser = process.env.YTDLP_BROWSER || 'chrome';
+        fallback.push('--cookies-from-browser', browser);
+      }
+
       if (process.env.YTDLP_PROXY) fallback.push('--proxy', process.env.YTDLP_PROXY);
 
       await runYtDlp(fallback, '/tmp');
@@ -207,13 +228,20 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     console.error('yt-dlp error:', error);
     const msg = error.message || String(error);
 
-    // New: detect "Sign in to confirm you're not a bot" message and instruct about cookies
-    if (msg.includes('Sign in to confirm') || msg.includes('Sign in') && msg.includes('bot')) {
-      // instruct the caller how to provide cookies
+    // Detect "Sign in to confirm you're not a bot" and cookie-related errors
+    if (msg.includes('Sign in to confirm') || (msg.includes('Sign in') && msg.includes('bot')) || msg.includes('authenticated cookies')) {
       throw new Error(
-        'VIDEO_REQUIRES_COOKIES: This video requires authenticated cookies (Sign in to confirm you are not a bot). ' +
-        'Provide a cookies.txt file and set the YTDLP_COOKIES environment variable to its path, ' +
-        'or use --cookies-from-browser locally. See: https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp'
+        'VIDEO_REQUIRES_COOKIES: This video requires authentication. YouTube is detecting automated access. ' +
+        'The service is configured to use browser cookies automatically, but this may fail in Docker environments. ' +
+        'Please try again later or contact support.'
+      );
+    }
+
+    // Detect SQLite/cookie database errors (when browser cookies can't be read)
+    if (msg.includes('sqlite3') || msg.includes('Cookies.sqlite') || msg.includes('cookie') && msg.includes('database')) {
+      throw new Error(
+        'VIDEO_REQUIRES_COOKIES: Unable to extract browser cookies. This typically occurs in server environments. ' +
+        'Please try a different video or contact support.'
       );
     }
 
