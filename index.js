@@ -14,6 +14,11 @@ const port = process.env.PORT || 8080;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// --- New: prefer tmpfs for intermediate files when available ---
+const PREFERRED_TMP_DIR = process.env.YTDLP_TMP_DIR
+  || (process.platform !== 'win32' && fs.existsSync('/dev/shm') ? '/dev/shm' : '/tmp');
+console.log('Preferred tmp dir for yt-dlp/ffmpeg:', PREFERRED_TMP_DIR);
+
 const upload = multer({
   dest: '/tmp/',
   limits: { fileSize: 500 * 1024 * 1024 }
@@ -124,7 +129,7 @@ function sanitizeArgsForLog(args) {
   return masked.join(' ');
 }
 
-function runYtDlp(args, cwd = '/tmp') {
+function runYtDlp(args, cwd = PREFERRED_TMP_DIR) {
   return new Promise((resolve, reject) => {
     try {
       console.log('yt-dlp ->', sanitizeArgsForLog(args));
@@ -257,7 +262,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     let probedDurationSec = 0; // duration exposed for long-video decision
     try {
       console.log('Probing video metadata (fast)...');
-      const probe = await runYtDlp(['--no-warnings', '--skip-download', '--dump-json', cleanedUrl], '/tmp');
+      const probe = await runYtDlp(['--no-warnings', '--skip-download', '--dump-json', cleanedUrl], PREFERRED_TMP_DIR);
       // --dump-json may output multiple lines (playlist etc.) — parse first JSON line
       const firstLine = (probe.stdout || '').split('\n').find(l => l.trim().length > 0);
       if (firstLine) {
@@ -378,7 +383,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
 
     // Try first attempt
     try {
-      await runYtDlp([...baseArgs, ...extraArgs], '/tmp');
+      await runYtDlp([...baseArgs, ...extraArgs], PREFERRED_TMP_DIR);
       console.log('SUCCESS: Primary method worked!');
     } catch (firstErr) {
       console.warn('Layer 1 failed:', firstErr.message);
@@ -400,7 +405,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
         if (process.env.YTDLP_COOKIES) tvFallback.push('--cookies', process.env.YTDLP_COOKIES);
         if (process.env.YTDLP_PROXY) tvFallback.push('--proxy', process.env.YTDLP_PROXY);
 
-        await runYtDlp(tvFallback, '/tmp');
+        await runYtDlp(tvFallback, PREFERRED_TMP_DIR);
         console.log('SUCCESS: TV embedded client fallback worked!');
         lastYtdlpError = null;
       } catch (tvErr) {
@@ -423,7 +428,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
           if (process.env.YTDLP_COOKIES) safariFallback.push('--cookies', process.env.YTDLP_COOKIES);
           if (process.env.YTDLP_PROXY) safariFallback.push('--proxy', process.env.YTDLP_PROXY);
 
-          await runYtDlp(safariFallback, '/tmp');
+          await runYtDlp(safariFallback, PREFERRED_TMP_DIR);
           console.log('SUCCESS: Web Safari client fallback worked!');
           lastYtdlpError = null;
         } catch (safariErr) {
@@ -448,7 +453,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
           if (process.env.YTDLP_COOKIES) embeddedFallback.push('--cookies', process.env.YTDLP_COOKIES);
           if (process.env.YTDLP_PROXY) embeddedFallback.push('--proxy', process.env.YTDLP_PROXY);
 
-          await runYtDlp(embeddedFallback, '/tmp');
+          await runYtDlp(embeddedFallback, PREFERRED_TMP_DIR);
           console.log('SUCCESS: Web embedded fallback worked!');
           lastYtdlpError = null;
         }
@@ -482,7 +487,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
           if (process.env.YTDLP_COOKIES) hlsArgs.push('--cookies', process.env.YTDLP_COOKIES);
           if (process.env.YTDLP_PROXY) hlsArgs.push('--proxy', process.env.YTDLP_PROXY);
 
-          await runYtDlp(hlsArgs, '/tmp');
+          await runYtDlp(hlsArgs, PREFERRED_TMP_DIR);
           console.log('SUCCESS: HLS-friendly retry worked!');
           lastYtdlpError = null;
         } catch (hlsErr) {
@@ -845,10 +850,10 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
 
         // Acquire a download slot before expensive work
         await acquireDownloadSlot();
-        let downloadedPath = null;
-        try {
-          // perform actual download + conversion (this will produce a file path)
-          downloadedPath = await downloadVideoWithYtdlpUltimate(videoUrl, '/tmp', premium);
+         let downloadedPath = null;
+         try {
+           // perform actual download + conversion (this will produce a file path)
+           downloadedPath = await downloadVideoWithYtdlpUltimate(videoUrl, PREFERRED_TMP_DIR, premium);
           // If the returned file is not an mp3, convertToMp3Ultimate call already handled it in the function.
           // Copy to cache for future requests (atomic-ish)
           if (downloadedPath && fs.existsSync(downloadedPath)) {
