@@ -1,6 +1,6 @@
 const express = require('express');
 const multer = require('multer');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
@@ -94,8 +94,42 @@ function cleanVideoUrl(input) {
   }
 }
 
+// Replace runYtDlp with a version that logs sanitized commands + stderr for easier debugging
+function sanitizeArgsForLog(args) {
+  const masked = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--cookies' || a === '--proxy' || a === '--cookies-from-browser') {
+      const next = args[i + 1];
+      masked.push(a);
+      if (next) {
+        // mask sensitive value but keep host/port visible when proxy (attempt)
+        if (a === '--proxy' && typeof next === 'string') {
+          try {
+            const u = new URL(next);
+            const port = u.port || (u.protocol === 'http:' ? '80' : (u.protocol === 'https:' ? '443' : ''));
+            masked.push(`${u.protocol}//${u.hostname}:${port}`);
+          } catch (e) {
+            masked.push('[masked-proxy]');
+          }
+        } else {
+          masked.push('[masked]');
+        }
+        i++; // skip the next arg since we've logged it
+      }
+    } else {
+      masked.push(a);
+    }
+  }
+  return masked.join(' ');
+}
+
 function runYtDlp(args, cwd = '/tmp') {
   return new Promise((resolve, reject) => {
+    try {
+      console.log('yt-dlp ->', sanitizeArgsForLog(args));
+    } catch (e) { /* ignore logging errors */ }
+
     const proc = spawn('yt-dlp', args, { cwd });
 
     let stdout = '';
@@ -114,11 +148,97 @@ function runYtDlp(args, cwd = '/tmp') {
     proc.on('error', err => reject(err));
     proc.on('close', code => {
       if (code === 0) return resolve({ stdout, stderr });
+      // Log full stderr (trimmed) for debugging
+      try {
+        console.warn('yt-dlp failed (code %d). stderr:', code, stderr.toString().trim().slice(0, 1000));
+        if (stdout && stdout.trim()) console.warn('yt-dlp stdout (trim):', stdout.toString().trim().slice(0, 1000));
+      } catch (e) { /* ignore logging errors */ }
+
       const err = new Error(`yt-dlp exit ${code}: ${stderr || stdout}`);
       err.code = code;
       err.stdout = stdout;
       err.stderr = stderr;
       reject(err);
+    });
+  });
+}
+
+// New helper: stream yt-dlp -> ffmpeg to produce an MP3 without writing the source file
+async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, ytExtraArgs = [], playerClient = 'web') {
+  return new Promise((resolve, reject) => {
+    // build yt-dlp args that write media to stdout
+    const ytdlpArgs = [
+      '--no-playlist',
+      '--no-warnings',
+      '-f', ytFormat,
+      '-o', '-', // stream to stdout
+      // keep extractor client minimal; caller may append extractor args if needed
+      cleanedUrl,
+      ...ytExtraArgs
+    ];
+
+    // spawn yt-dlp
+    const ytdlp = spawn('yt-dlp', ytdlpArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+    // choose bitrate/quality consistent with convertToMp3Ultimate
+    const bitrate = isPremium ? '192k' : '96k';
+    const quality = isPremium ? '2' : '6';
+
+    // spawn ffmpeg to read from stdin and write mp3
+    const ffmpegArgs = [
+      '-hide_banner',
+      '-loglevel', 'error',
+      '-i', 'pipe:0',
+      '-vn', '-sn', '-dn',
+      '-map', '0:a:0',
+      '-c:a', 'libmp3lame',
+      '-b:a', bitrate,
+      '-ar', '44100',
+      '-ac', '2',
+      '-compression_level', '0',
+      '-q:a', quality,
+      '-write_xing', '0',
+      '-id3v2_version', '0',
+      '-f', 'mp3',
+      '-y',
+      outputPath
+    ];
+    const ff = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+
+    // pipe yt-dlp stdout into ffmpeg stdin
+    ytdlp.stdout.pipe(ff.stdin);
+
+    let ffErr = '';
+    ff.stderr.on('data', (b) => { ffErr += b.toString(); });
+
+    // if yt-dlp errors early, capture stderr
+    let ytdlpErr = '';
+    ytdlp.stderr.on('data', (b) => { ytdlpErr += b.toString(); });
+
+    ff.on('close', (code) => {
+      // ensure yt-dlp process is terminated
+      try { ytdlp.kill(); } catch (e) {}
+      if (code === 0) return resolve();
+      const msg = ffErr || ytdlpErr || `ffmpeg exited ${code}`;
+      reject(new Error(`PIPED_FAILED: ${msg}`));
+    });
+
+    ff.on('error', (e) => {
+      try { ytdlp.kill(); } catch (er) {}
+      reject(e);
+    });
+
+    ytdlp.on('error', (e) => {
+      try { ff.kill(); } catch (er) {}
+      reject(e);
+    });
+
+    // safety: if yt-dlp exits early with non-zero, capture that
+    ytdlp.on('close', (yc) => {
+      if (yc !== 0) {
+        // let ffmpeg handle final failure; but if ff still running long, we can surface yt-dlp error
+        // nothing to do here explicitly
+      }
     });
   });
 }
@@ -132,16 +252,69 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
   try {
     console.log('DEBUG download:', cleanedUrl);
 
+    // NEW: quick metadata probe to pick a faster format for short videos
+    let preferM4aForShort = false;
+    let probedDurationSec = 0; // duration exposed for long-video decision
+    try {
+      console.log('Probing video metadata (fast)...');
+      const probe = await runYtDlp(['--no-warnings', '--skip-download', '--dump-json', cleanedUrl], '/tmp');
+      // --dump-json may output multiple lines (playlist etc.) — parse first JSON line
+      const firstLine = (probe.stdout || '').split('\n').find(l => l.trim().length > 0);
+      if (firstLine) {
+        try {
+          const info = JSON.parse(firstLine);
+          const durationSec = Number(info.duration || info._duration || 0);
+          probedDurationSec = !isNaN(durationSec) ? durationSec : 0;
+          console.log('Probed duration (s):', probedDurationSec);
+          // If very short (less than 2 minutes) prefer compact m4a stream
+          if (probedDurationSec > 0 && probedDurationSec <= 120) {
+            preferM4aForShort = true;
+            console.log('Short video detected — enabling fast format preference (m4a/abr cap).');
+          }
+        } catch (e) {
+          // ignore parse errors, continue with defaults
+          console.warn('Failed to parse yt-dlp probe JSON:', e.message);
+        }
+      }
+    } catch (probeErr) {
+      // Probe failed — not fatal, continue with normal flow
+      console.warn('Metadata probe failed (continuing):', probeErr.message);
+    }
+
     // LAYER 1: Web client with optimized settings (no PO Token needed)
+    // choose a slightly different format string when preferring m4a for speed
+    const formatString = isPremium
+      ? 'bestaudio/best'
+      : (preferM4aForShort ? 'bestaudio[ext=m4a][abr<=160]/bestaudio[abr<=128]/bestaudio/best' : 'bestaudio[abr<=128]/bestaudio/best');
+
+    // Determine which yt-dlp player_client to use for the primary attempt.
+    // You can force a client via env: PREFERRED_YTDLP_CLIENT=web_safari (or tv_embedded, web_embedded, web)
+    const preferredClientEnv = (process.env.PREFERRED_YTDLP_CLIENT || '').trim();
+    let playerClient = 'web';
+    if (preferredClientEnv) {
+      playerClient = preferredClientEnv;
+    } else if (preferM4aForShort) {
+      // for short clips try the Safari web client first — often yields smaller audio streams
+      playerClient = 'web_safari';
+    } else {
+      // Also prefer web_safari for long videos (configurable threshold)
+      const LONG_VIDEO_THRESHOLD = Number(process.env.LONG_VIDEO_THRESHOLD || 600); // seconds
+      if (probedDurationSec >= LONG_VIDEO_THRESHOLD) {
+        playerClient = 'web_safari';
+        console.log(`Long video detected (${probedDurationSec}s) — using web_safari as primary client`);
+      }
+    }
+    console.log(`Using primary yt-dlp player_client: ${playerClient}`);
+
     const baseArgs = [
       '--no-playlist',
       '-x', '--audio-format', 'mp3',
-      '--format', isPremium ? 'bestaudio/best' : 'bestaudio[abr<=128]/bestaudio/best',
+      '--format', formatString,
       '--output', outputTemplate,
       '--no-mtime',
 
-      // Use web client to avoid PO Token requirement
-      '--extractor-args', 'youtube:player_client=web',
+      // Use selected client to avoid PO Token requirement
+      '--extractor-args', `youtube:player_client=${playerClient}`,
 
       // Anti-bot detection headers
       '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -176,6 +349,32 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
 
     // Keep track of last yt-dlp error to decide on special HLS retry
     let lastYtdlpError = null;
+
+    // Decide if we should attempt the piped fast path:
+    // - opt-in via ENABLE_PIPE=1, or
+    // - automatically for short videos (preferM4aForShort = true)
+    const enablePipe = process.env.ENABLE_PIPE === '0' ? false : true;
+    if (enablePipe) console.log('Fast piped yt-dlp->ffmpeg path ENABLED for this request (can be disabled with ENABLE_PIPE=0)');
+
+    if (enablePipe) {
+      const pipedMp3Path = `${outputDir}/ytdlp_${videoId}.mp3`;
+      // prepare yt-dlp extra args (cookies/proxy) to forward to the piped run
+      const ytExtraArgsForPipe = [];
+      if (process.env.YTDLP_COOKIES) ytExtraArgsForPipe.push('--cookies', process.env.YTDLP_COOKIES);
+      else if (process.env.YTDLP_BROWSER) ytExtraArgsForPipe.push('--cookies-from-browser', process.env.YTDLP_BROWSER);
+      if (process.env.YTDLP_PROXY) ytExtraArgsForPipe.push('--proxy', process.env.YTDLP_PROXY);
+
+      try {
+        console.log('Attempting fast piped yt-dlp -> ffmpeg path (no intermediate file)...');
+        // note: pass formatString (we built earlier) as ytFormat
+        await streamYtdlpToFfmpeg(cleanedUrl, formatString, pipedMp3Path, isPremium, ytExtraArgsForPipe, playerClient);
+        console.log('SUCCESS: piped yt-dlp->ffmpeg produced MP3:', pipedMp3Path);
+        return pipedMp3Path;
+      } catch (pipeErr) {
+        console.warn('Piped fast path failed, falling back to layered approach:', pipeErr.message);
+        // fall-through to existing layered attempts
+      }
+    }
 
     // Try first attempt
     try {
@@ -554,6 +753,32 @@ if (PROXY_CONFIG) {
   console.log('No proxy configured via YTDLP_PROXY');
 }
 
+// --- New: binary presence checks (yt-dlp, ffmpeg, python3) ---
+function checkBinary(cmd, args = ['--version']) {
+  try {
+    const r = spawnSync(cmd, args, { encoding: 'utf8', stdio: ['ignore','pipe','pipe'] });
+    if (r.error) return { ok: false, message: r.error.message };
+    if (r.status !== 0) return { ok: false, message: (r.stderr || r.stdout || `exit ${r.status}`).toString().trim() };
+    return { ok: true, message: (r.stdout || r.stderr).toString().split('\n')[0] || 'ok' };
+  } catch (e) {
+    return { ok: false, message: e.message };
+  }
+}
+
+const BINARIES = {
+  'yt-dlp': checkBinary('yt-dlp', ['--version']),
+  'ffmpeg': checkBinary('ffmpeg', ['-version']),
+  'python3': checkBinary('python3', ['--version'])
+};
+
+Object.keys(BINARIES).forEach(k => {
+  if (!BINARIES[k].ok) {
+    console.warn(`MISSING BINARY: ${k} -> ${BINARIES[k].message}`);
+  } else {
+    console.log(`FOUND BINARY: ${k} -> ${BINARIES[k].message}`);
+  }
+});
+
 app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
   const premium = isPremiumUser(req);
   console.log(`ULTIMATE conversion request - ${premium ? 'PREMIUM' : 'STANDARD'} user`);
@@ -748,6 +973,11 @@ app.get('/health', (req, res) => {
     layers: '4 (Web → TV Embedded → Safari → Web Embedded)',
     cookiesEnabled: !!process.env.YTDLP_COOKIES,
     proxyEnabled: !!process.env.YTDLP_PROXY,
+    binaries: {
+      'yt-dlp': BINARIES['yt-dlp'],
+      'ffmpeg': BINARIES['ffmpeg'],
+      'python3': BINARIES['python3']
+    },
     note: 'All layers bypass PO Token requirement'
   });
 });
