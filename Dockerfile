@@ -25,11 +25,12 @@ ENV VIDEO_CACHE_DIR=/data/video_cache
 ENV PATH="/usr/local/bin:$PATH"
 ENV FFMPEG_PATH=/usr/bin/ffmpeg
 
-# Install only runtime packages
+# Install only runtime packages (ensure python3 present for yt-dlp)
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ffmpeg \
   curl \
   ca-certificates \
+  python3 \
   && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user and home dir
