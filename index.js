@@ -287,7 +287,8 @@ if (PROXY_CONFIG) {
 }
 
 // --- New helper: decide whether to pass --proxy to yt-dlp for a given URL ---
-// Use env YTDLP_SKIP_PROXY_HOSTS (comma-separated, default: youtube hosts) to skip proxy for matching hosts.
+// Use env YTDLP_SKIP_PROXY_HOSTS (comma-separated) to skip proxy for matching hosts.
+// Default is empty (no hosts skipped) so configured proxy will be used for YouTube as well.
 // Set YTDLP_FORCE_PROXY=1 to force proxy for all hosts regardless of skip list.
 function shouldUseProxyForUrl(url) {
   try {
@@ -296,14 +297,15 @@ function shouldUseProxyForUrl(url) {
     if (!raw) return false;
     const u = new URL(raw);
     const host = u.hostname.toLowerCase();
-    const skip = (process.env.YTDLP_SKIP_PROXY_HOSTS || 'youtube.com,youtu.be').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    // Default skip list is empty now — proxy will be used unless you explicitly set YTDLP_SKIP_PROXY_HOSTS
+    const skip = (process.env.YTDLP_SKIP_PROXY_HOSTS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
     // if any skip token is contained in host, do NOT use proxy
     for (const token of skip) {
       if (host.includes(token)) {
         return false;
       }
     }
-    return !!PROXY_CONFIG; // only use proxy if configured and not skipped
+    return !!PROXY_CONFIG; // use proxy if configured
   } catch (e) {
     // on parse problems, fall back to using proxy only if explicitly configured and forced
     return !!PROXY_CONFIG && String(process.env.YTDLP_FORCE_PROXY || '').trim() === '1';
@@ -632,7 +634,14 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     }
 
     // Find generated file
-    const allFiles = fs.readdirSync(outputDir);
+    let allFiles;
+    try {
+      allFiles = safeReaddir(outputDir);
+    } catch (dirErr) {
+      console.error('Invalid outputDir passed to downloadVideoWithYtdlpUltimate:', { outputDir, err: dirErr && dirErr.message });
+      throw dirErr;
+    }
+
     const files = allFiles.filter(f =>
       f.startsWith(`ytdlp_${videoId}.`) &&
       (f.endsWith('.mp3') || f.endsWith('.webm') || f.endsWith('.m4a') || f.endsWith('.wav') || f.endsWith('.aac'))
@@ -774,8 +783,8 @@ const handleUpload = (req, res, next) => {
 
 // Simple cache directory for converted MP3s (fast path for repeat URLs)
 const CACHE_DIR = process.env.VIDEO_CACHE_DIR || path.join(os.tmpdir(), 'video_cache');
-if (!fs.existsSync(CACHE_DIR)) {
-  fs.mkdirSync(CACHE_DIR, { recursive: true });
+if (!safeExists(CACHE_DIR)) {
+  try { fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch (e) { console.error('Failed to create CACHE_DIR', CACHE_DIR, e); throw e; }
 }
 
 // Serve cached/converted files under /file (static) and provide a guarded download endpoint
@@ -790,7 +799,7 @@ app.get('/file/:name', (req, res) => {
       return res.status(400).json({ error: 'Invalid file name' });
     }
     const filePath = path.join(CACHE_DIR, name);
-    if (!fs.existsSync(filePath)) {
+    if (!safeExists(filePath)) {
       return res.status(404).json({ error: 'File not found' });
     }
     res.setHeader('Content-Type', 'audio/mpeg');
@@ -861,7 +870,7 @@ async function convertVideoHandler(req, res) {
 				console.error('downloadVideoWithYtdlpUltimate returned invalid producedPath:', producedPath);
 				throw new Error('DOWNLOAD_FAILED: yt-dlp did not produce a valid output path.');
 			}
-			if (!fs.existsSync(producedPath)) {
+			if (!safeExists(producedPath)) {
 				console.error('Produced file does not exist on disk:', producedPath);
 				throw new Error('DOWNLOAD_FAILED: produced file missing on disk.');
 			}
@@ -919,7 +928,7 @@ async function convertVideoHandler(req, res) {
 	}
 
 	// Ensure the cached output exists before returning URL (extra logging)
-	if (!fs.existsSync(outputFilePath)) {
+	if (!safeExists(outputFilePath)) {
 		console.error('Expected cached output missing:', {
 			outputFilePath,
 			producedPath: typeof producedPath !== 'undefined' ? producedPath : '<<undefined>>',
@@ -987,3 +996,26 @@ app.listen(port, () => {
   console.log('  - PO Token bypass: ALL LAYERS');
   console.log('\nReady to process requests! 🚀\n');
 });
+
+// --- New: safe filesystem helpers to avoid ERR_INVALID_ARG_TYPE when inputs are undefined ---
+function safeExists(p) {
+	// return false for non-string or empty values rather than passing them to fs.existsSync
+	try {
+		if (typeof p !== 'string' || p.trim() === '') return false;
+		return fs.existsSync(p);
+	} catch (e) {
+		// log and return false rather than throwing Node's ERR_INVALID_ARG_TYPE
+		console.warn('safeExists error for', p, e && e.message ? e.message : e);
+		return false;
+	}
+}
+
+function safeReaddir(dir) {
+	if (typeof dir !== 'string' || dir.trim() === '') {
+		const err = new Error('INVALID_OUTPUT_DIR: output directory must be a non-empty string');
+		err.code = 'INVALID_OUTPUT_DIR';
+		throw err;
+	}
+	// allow fs to throw other IO errors (permissions, not found), let caller handle them
+	return fs.readdirSync(dir);
+}
