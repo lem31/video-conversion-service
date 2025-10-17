@@ -253,6 +253,15 @@ function runYtDlp(args, cwd = '/tmp') {
 
 // --- New helper: parse and validate YTDLP_PROXY / RPXY env ---
 // Accepts either YTDLP_PROXY or RPXY when YTDLP_USE_RPXY=1 + YTDLP_RPXY_URL
+// --- Notes: RPXY (rpxy) usage ---
+// If you are using the rpxy service (RPXY), set:
+//   YTDLP_USE_RPXY=1
+//   YTDLP_RPXY_URL="http://rpxy-railway-production.up.railway.app"   # or include explicit scheme+port/path
+// parseProxyEnv will prefer YTDLP_RPXY_URL when YTDLP_USE_RPXY=1. The "raw" returned value is used as yt-dlp --proxy arg.
+// Example RPXY URL forms:
+//   http://rpxy.example.com                -> scheme http, default port 80
+//   https://rpxy.example.com:443/path      -> explicit https, port and optional path
+// If the rpxy endpoint expects a specific path, include it in YTDLP_RPXY_URL.
 function parseProxyEnv() {
   const useRpxy = String(process.env.YTDLP_USE_RPXY || '').trim() === '1';
   const rpxyRaw = process.env.YTDLP_RPXY_URL;
@@ -906,8 +915,23 @@ async function convertVideoHandler(req, res) {
 
 			console.log('Download + conversion completed.');
 		} catch (error) {
+			// Log full error server-side
 			console.error('Error during download + conversion:', error && error.stack ? error.stack : error);
-			return res.status(500).json({ error: 'Failed to process video URL.', errorCode: 'PROCESSING_ERROR', detail: error.message });
+
+			// Build informative response for client
+			const info = formatProcessingError(error);
+			const resp = {
+				error: 'Failed to process video URL.',
+				errorCode: 'PROCESSING_ERROR',
+				errorDetail: info.message
+			};
+			if (info.code) resp.errorSubCode = info.code;
+			if (info.stderr) resp.yt_stderr = info.stderr;
+			if (info.stdout) resp.yt_stdout = info.stdout;
+			// include small stack snippet for debugging (optional)
+			if (info.stack) resp.errorStack = info.stack;
+
+			return res.status(500).json(resp);
 		}
 	}
 
@@ -1017,5 +1041,27 @@ function safeReaddir(dir) {
 		throw err;
 	}
 	// allow fs to throw other IO errors (permissions, not found), let caller handle them
-	return fs.readdirSync(dir);
+	try {
+		return fs.readdirSync(dir);
+	} catch (e) {
+		// normalize and rethrow so callers get a consistent error shape
+		console.error('safeReaddir error for', dir, e && e.message ? e.message : e);
+		throw e;
+	}
+}
+
+// New helper: normalize an Error for JSON responses (shorten stacks/stdout/stderr)
+function formatProcessingError(err) {
+  const message = err && (err.message || String(err)) || 'Unknown error';
+  const stderr = err && (err.stderr || err.stderr === '' ? String(err.stderr) : undefined);
+  const stdout = err && (err.stdout || err.stdout === '' ? String(err.stdout) : undefined);
+  const code = err && (err.code || err.statusCode || err.errno) || undefined;
+  const stack = err && err.stack ? String(err.stack).split('\n').slice(0,6).join('\n') : undefined;
+  return {
+    message,
+    code,
+    stderr: stderr ? stderr.slice(0, 2000) : undefined,
+    stdout: stdout ? stdout.slice(0, 2000) : undefined,
+    stack
+  };
 }
