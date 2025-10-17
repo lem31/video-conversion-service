@@ -1,43 +1,65 @@
-# Minimal Node image with Python + requests/curl_cffi to support yt-dlp HTTPS proxy usage.
-FROM node:18-bookworm-slim
-
-# Install minimal system deps and Python/pip
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-      python3 python3-pip python3-venv ca-certificates ffmpeg wget && \
-    rm -rf /var/lib/apt/lists/*
-
-# Create an isolated virtualenv and install Python deps there to avoid
-# "externally-managed-environment" (PEP 668) errors when installing system-wide.
-RUN python3 -m venv /opt/pyenv && \
-    /opt/pyenv/bin/pip install --upgrade pip setuptools wheel && \
-    /opt/pyenv/bin/pip install --no-cache-dir requests curl_cffi yt-dlp && \
-    rm -rf /root/.cache /var/lib/apt/lists/*
-
-# Put venv binaries (yt-dlp, pip, etc.) on PATH
-ENV PATH="/opt/pyenv/bin:${PATH}"
-
-# Install node deps and copy app
+# --- Builder stage: install dependencies and produce node_modules ---
+FROM node:18-bookworm AS builder
 WORKDIR /app
-COPY package*.json ./
 
-# Use package-lock.json when available; fall back to npm install --omit=dev when not present.
-# This prevents `npm ci` from failing in environments without a lockfile.
+# Copy package files and install production deps reproducibly (use npm ci when lockfile exists, fallback to npm install)
+COPY package*.json ./
 RUN if [ -f package-lock.json ]; then \
-      echo "Found package-lock.json → using npm ci"; \
-      npm ci --only=production; \
+      echo "package-lock.json found — running npm ci"; \
+      npm ci --only=production --no-audit --no-fund; \
     else \
-      echo "No package-lock.json → using npm install --omit=dev"; \
-      npm install --omit=dev --no-audit --no-fund; \
+      echo "No package-lock.json — running npm install"; \
+      npm install --only=production --no-audit --no-fund; \
     fi
 
-# Copy source
+# Copy app sources (no build step assumed; if you have one, run it here)
 COPY . .
 
-# Build-time sanity check: ensure index.js exists (fail fast if code got removed)
-RUN test -f index.js || (echo "ERROR: index.js missing — build aborted (possible accidental removal)." && exit 1)
+# --- Final runtime stage: smaller surface, non-root user ---
+FROM node:18-bookworm-slim
 
+# Basic env + sensible defaults
+ENV NODE_ENV=production
+ENV MAX_CONCURRENT_DOWNLOADS=2
+ENV VIDEO_CACHE_DIR=/data/video_cache
+ENV PATH="/usr/local/bin:$PATH"
+ENV FFMPEG_PATH=/usr/bin/ffmpeg
+
+# Install only runtime packages (ensure python3 present for yt-dlp)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  ffmpeg \
+  curl \
+  ca-certificates \
+  python3 \
+  && rm -rf /var/lib/apt/lists/*
+
+# Create a non-root user and home dir
+RUN groupadd -r appuser && useradd -r -g appuser -d /home/appuser -s /sbin/nologin appuser \
+  && mkdir -p /home/appuser && chown -R appuser:appuser /home/appuser
+
+# Install yt-dlp standalone binary (avoid pip), keep executable
+RUN curl -fsSL -o /usr/local/bin/yt-dlp \
+      https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+  && chmod 755 /usr/local/bin/yt-dlp \
+  && /usr/local/bin/yt-dlp --version || true
+
+# Create cache directory owned by appuser (no 777)
+RUN mkdir -p /tmp && chmod 1777 /tmp \
+  && mkdir -p "${VIDEO_CACHE_DIR}" && chown -R appuser:appuser "${VIDEO_CACHE_DIR}"
+
+# App working directory
+WORKDIR /app
+
+# Copy built app and node_modules from builder, set ownership to appuser
+COPY --chown=appuser:appuser --from=builder /app /app
+
+# Switch to non-root user
+USER appuser
+
+# Expose port and keep lightweight healthcheck
 EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+  CMD curl -fsS http://localhost:8080/health || exit 1
 
-# Run the app
-CMD ["node", "index.js"]
+# Use same start command as before
+CMD ["npm", "start"]
