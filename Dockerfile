@@ -25,6 +25,12 @@ ENV VIDEO_CACHE_DIR=/data/video_cache
 ENV PATH="/usr/local/bin:$PATH"
 ENV FFMPEG_PATH=/usr/bin/ffmpeg
 
+# Prefer /dev/shm for temporary work inside container (can be overridden by YTDLP_TMP_DIR)
+# Note: at runtime you should start the container with a larger shared memory, e.g.:
+#   docker run --shm-size=1g ...
+ENV TMPDIR=/dev/shm
+ENV YTDLP_TMP_DIR=/dev/shm
+
 # Install only runtime packages (ensure python3 present for yt-dlp)
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ffmpeg \
