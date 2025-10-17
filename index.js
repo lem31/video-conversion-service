@@ -14,6 +14,22 @@ const port = process.env.PORT || 8080;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Allow simple CORS so frontend (possibly on another origin) can fetch converted files.
+// Set CORS_ORIGINS="https://example.com,https://app.example" to restrict origins, otherwise defaults to '*'
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  const allowList = (process.env.CORS_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (allowList.length === 0) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  } else if (origin && allowList.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 const upload = multer({
   dest: '/tmp/',
   limits: { fileSize: 500 * 1024 * 1024 }
@@ -468,9 +484,6 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       }
     }
 
-    // use PROXY_CONFIG.raw when available
-    if (PROXY_CONFIG) extraArgs.push('--proxy', PROXY_CONFIG.raw);
-
     // decide piped etc — keep your original fallback layers
     const enablePipe = process.env.ENABLE_PIPE === '0' ? false : true;
     if (enablePipe) console.log('Fast piped yt-dlp->ffmpeg path ENABLED for this request (can be disabled with ENABLE_PIPE=0)');
@@ -749,63 +762,34 @@ if (!fs.existsSync(CACHE_DIR)) {
   fs.mkdirSync(CACHE_DIR, { recursive: true });
 }
 
-// Serve cached/converted files under /file
+// Serve cached/converted files under /file (static) and provide a guarded download endpoint
 app.use('/file', express.static(CACHE_DIR));
 
-// New: start periodic cache cleaner (configurable via env)
-const { startCacheCleaner } = require('./cacheCleaner');
-const CACHE_CLEAN_DAYS = Number(process.env.CACHE_CLEAN_DAYS || 7); // default 7 days
-const CACHE_CLEAN_INTERVAL_HOURS = Number(process.env.CACHE_CLEAN_INTERVAL_HOURS || 24); // default every 24h
-try {
-  startCacheCleaner(CACHE_DIR, CACHE_CLEAN_DAYS, CACHE_CLEAN_INTERVAL_HOURS);
-  console.log(`Cache cleaner started: purge files older than ${CACHE_CLEAN_DAYS} days every ${CACHE_CLEAN_INTERVAL_HOURS} hours`);
-} catch (e) {
-  console.warn('Failed to start cache cleaner:', e.message);
-}
-
-// Concurrency limiter for downloads (tier-aware semaphore)
-const MAX_CONCURRENT_DOWNLOADS = Number(process.env.MAX_CONCURRENT_DOWNLOADS || 2);
-const BUSINESS_MAX_CONCURRENT_DOWNLOADS = Number(process.env.BUSINESS_MAX_CONCURRENT_DOWNLOADS || 10);
-const ENTERPRISE_MAX_CONCURRENT_DOWNLOADS = Number(process.env.ENTERPRISE_MAX_CONCURRENT_DOWNLOADS || 50);
-let currentDownloads = 0;
-// queue holds { resolve, tier } entries
-const downloadQueue = [];
-
-function getLimitForTier(tier) {
-  if (tier === 'enterprise') return ENTERPRISE_MAX_CONCURRENT_DOWNLOADS;
-  if (tier === 'business') return BUSINESS_MAX_CONCURRENT_DOWNLOADS;
-  // premium falls back to standard limit (no special batch allowance unless you set BUSINESS/ENTERPRISE)
-  return MAX_CONCURRENT_DOWNLOADS;
-}
-
-function acquireDownloadSlot(tier = 'standard') {
-  const limit = getLimitForTier(tier);
-  return new Promise((resolve) => {
-    if (currentDownloads < limit) {
-      currentDownloads++;
-      return resolve();
+// New explicit safe file download route (prevents undefined / path issues and sets proper headers)
+app.get('/file/:name', (req, res) => {
+  try {
+    const name = String(req.params.name || '').trim();
+    // simple whitelist: uuid-like + .mp3
+    if (!/^[a-f0-9\-]{36}\.mp3$/i.test(name)) {
+      return res.status(400).json({ error: 'Invalid file name' });
     }
-    downloadQueue.push({ resolve, tier });
-  });
-}
-
-function releaseDownloadSlot() {
-  currentDownloads = Math.max(0, currentDownloads - 1);
-  if (downloadQueue.length === 0) return;
-
-  // Find the first queued entry whose tier limit allows starting now.
-  for (let i = 0; i < downloadQueue.length; i++) {
-    const entry = downloadQueue[i];
-    const entryLimit = getLimitForTier(entry.tier);
-    if (currentDownloads < entryLimit) {
-      downloadQueue.splice(i, 1);
-      currentDownloads++;
-      try { entry.resolve(); } catch (e) { /* ignore */ }
-      return;
+    const filePath = path.join(CACHE_DIR, name);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'File not found' });
     }
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.sendFile(filePath, (err) => {
+      if (err) {
+        console.error('sendFile error for', filePath, err);
+        if (!res.headersSent) res.status(500).end();
+      }
+    });
+  } catch (err) {
+    console.error('file download handler error', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
-  // nothing could start; a later release will re-check
-}
+});
 
 // --- Replace the inline app.post('/convert-video-to-mp3', ...) handler with a named function so we can reuse it ---
 // Move the entire body that was previously inside the inline async (req,res) => { ... } here:
@@ -900,8 +884,14 @@ async function convertVideoHandler(req, res) {
     }
   }
 
+  // Ensure the cached output exists before returning URL
+  if (!fs.existsSync(outputFilePath)) {
+    console.error('Expected cached output missing:', outputFilePath);
+    return res.status(500).json({ error: 'Converted file missing', errorCode: 'MISSING_OUTPUT' });
+  }
+
   // Respond with the URL to the converted MP3 file (served from /file)
-  const fileUrl = `${req.protocol}://${req.get('host')}/file/${outputFileName}`;
+  const fileUrl = `${req.protocol}://${req.get('host')}/file/${encodeURIComponent(outputFileName)}`;
   res.json({ url: fileUrl, fileName: outputFileName });
 }
 
