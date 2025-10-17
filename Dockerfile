@@ -7,9 +7,20 @@ RUN apt-get update && \
       python3 python3-pip ca-certificates ffmpeg wget && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Python packages that yt-dlp can rely on for HTTPS proxy support
-# (requests is sufficient in most cases; curl_cffi is optional)
-RUN pip3 install --no-cache-dir requests curl_cffi yt-dlp
+# Install Python 3.11 and venv tools
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      python3.11 python3.11-venv ca-certificates ffmpeg wget && \
+    ln -sf /usr/bin/python3.11 /usr/bin/python3 && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create and activate virtual environment
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python packages inside the venv
+RUN pip install --no-cache-dir requests curl_cffi yt-dlp
+
 
 # Install node deps and copy app
 WORKDIR /app
