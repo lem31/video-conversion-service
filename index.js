@@ -911,34 +911,48 @@ function releaseDownloadSlot() {
   // nothing could start; a later release will re-check
 }
 
+// Optional: set your app's public hostname (used to detect proxy loops).
+// Example: SERVICE_PUBLIC_HOST=video-conversion-service-production.up.railway.app
+const SERVICE_PUBLIC_HOST = (process.env.SERVICE_PUBLIC_HOST || '').trim().toLowerCase();
+
 // --- New helper: parse and validate YTDLP_PROXY env (supports optional RPXY) ---
 function parseProxyEnv() {
-  // Prefer rpxy URL when explicitly enabled, otherwise fall back to YTDLP_PROXY.
-  const useRpxy = String(process.env.YTDLP_USE_RPXY || '').trim() === '1';
-  const rpxyRaw = process.env.YTDLP_RPXY_URL;
-  const rawInput = useRpxy && rpxyRaw ? rpxyRaw : process.env.YTDLP_PROXY;
-  if (!rawInput) return null;
+	// Prefer rpxy URL when explicitly enabled, otherwise fall back to YTDLP_PROXY.
+	const useRpxy = String(process.env.YTDLP_USE_RPXY || '').trim() === '1';
+	const rpxyRaw = process.env.YTDLP_RPXY_URL;
+	const rawInput = useRpxy && rpxyRaw ? rpxyRaw : process.env.YTDLP_PROXY;
+	if (!rawInput) return null;
 
-  const raw = String(rawInput).trim();
-  // Accept hostnames without http/https by defaulting to https://
-  const candidate = (raw.startsWith('http://') || raw.startsWith('https://')) ? raw : `https://${raw}`;
+	const raw = String(rawInput).trim();
+	// Accept hostnames without http/https by defaulting to https://
+	const candidate = (raw.startsWith('http://') || raw.startsWith('https://')) ? raw : `https://${raw}`;
 
-  try {
-    const u = new URL(candidate);
-    let port = u.port;
-    if (!port) {
-      const inferred = u.protocol === 'http:' ? '80' : (u.protocol === 'https:' ? '443' : '');
-      // Informational: we will default to the standard port for the scheme.
-      console.log(`Proxy provided without port; defaulting to port ${inferred} for ${u.protocol.replace(':','')}. You may include an explicit port in the proxy URL if desired.`);
-      port = inferred;
-    }
-    const auth = u.username ? { username: decodeURIComponent(u.username), password: decodeURIComponent(u.password) } : null;
-    const which = useRpxy && rpxyRaw ? 'rpxy' : 'proxy';
-    return { raw: candidate, protocol: u.protocol.replace(':', ''), host: u.hostname, port, auth, which };
-  } catch (err) {
-    console.warn('Invalid proxy value:', rawInput, err.message);
-    return null;
-  }
+	try {
+		const u = new URL(candidate);
+
+		// Detect accidental loop: proxy points back at this app's public host (common when using rpxy incorrectly).
+		if (SERVICE_PUBLIC_HOST) {
+			const svc = SERVICE_PUBLIC_HOST.toLowerCase();
+			if (u.hostname.toLowerCase().includes(svc) || candidate.toLowerCase().includes(svc)) {
+				console.warn(`Ignoring proxy setting because it points to the app itself (${svc}). This would create a request loop through the proxy/rpxy. Unset YTDLP_PROXY or use an external proxy.`);
+				return null;
+			}
+		}
+
+		let port = u.port;
+		if (!port) {
+			const inferred = u.protocol === 'http:' ? '80' : (u.protocol === 'https:' ? '443' : '');
+			// Informational: we will default to the standard port for the scheme.
+			console.log(`Proxy provided without port; defaulting to port ${inferred} for ${u.protocol.replace(':','')}. You may include an explicit port in the proxy URL if desired.`);
+			port = inferred;
+		}
+		const auth = u.username ? { username: decodeURIComponent(u.username), password: decodeURIComponent(u.password) } : null;
+		const which = useRpxy && rpxyRaw ? 'rpxy' : 'proxy';
+		return { raw: candidate, protocol: u.protocol.replace(':', ''), host: u.hostname, port, auth, which };
+	} catch (err) {
+		console.warn('Invalid proxy value:', rawInput, err.message);
+		return null;
+	}
 }
 
 const PROXY_CONFIG = parseProxyEnv();
