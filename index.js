@@ -810,109 +810,127 @@ app.get('/file/:name', (req, res) => {
 // --- Replace the inline app.post('/convert-video-to-mp3', ...) handler with a named function so we can reuse it ---
 // Move the entire body that was previously inside the inline async (req,res) => { ... } here:
 async function convertVideoHandler(req, res) {
-  // accept multiple possible field names from various frontends
-  let videoUrl = req.body.videoUrl || req.body.url || req.body.video;
-  let fileUpload = req.files && req.files.length > 0 ? req.files[0] : null;
+	// accept multiple possible field names from various frontends
+	let videoUrl = req.body.videoUrl || req.body.url || req.body.video;
+	let fileUpload = req.files && req.files.length > 0 ? req.files[0] : null;
 
-  // Validate input: must provide either a URL or a file
-  if (!videoUrl && !fileUpload) {
-    return res.status(400).json({ error: 'No video URL or file provided.', errorCode: 'INVALID_INPUT' });
-  }
+	// Validate input: must provide either a URL or a file
+	if (!videoUrl && !fileUpload) {
+		return res.status(400).json({ error: 'No video URL or file provided.', errorCode: 'INVALID_INPUT' });
+	}
 
-  // For debugging: log the entire request body and files
-  console.log('Request body:', req.body);
-  console.log('Files:', req.files);
+	// For debugging: log the entire request body and files
+	console.log('Request body:', req.body);
+	console.log('Files:', req.files);
 
-  // If URL is provided, validate and sanitize it
-  if (videoUrl) {
-    videoUrl = String(videoUrl).trim();
-    if (!isSupportedVideoUrl(videoUrl)) {
-      return res.status(400).json({ error: 'Unsupported video URL.', errorCode: 'INVALID_URL' });
-    }
-    console.log('Video URL:', videoUrl);
-  }
+	// If URL is provided, validate and sanitize it
+	if (videoUrl) {
+		videoUrl = String(videoUrl).trim();
+		if (!isSupportedVideoUrl(videoUrl)) {
+			return res.status(400).json({ error: 'Unsupported video URL.', errorCode: 'INVALID_URL' });
+		}
+		console.log('Video URL:', videoUrl);
+	}
 
-  // If file is uploaded, use it directly
-  let inputFilePath = null;
-  if (fileUpload) {
-    inputFilePath = fileUpload.path;
-    console.log('File upload detected:', inputFilePath);
-  }
+	// If file is uploaded, use it directly
+	let inputFilePath = null;
+	if (fileUpload) {
+		inputFilePath = fileUpload.path;
+		console.log('File upload detected:', inputFilePath);
+	}
 
-  // Determine output file name and path
-  const outputFileName = `${uuidv4()}.mp3`;
-  const outputFilePath = path.join(CACHE_DIR, outputFileName);
+	// Determine output file name and path
+	const outputFileName = `${uuidv4()}.mp3`;
+	const outputFilePath = path.join(CACHE_DIR, outputFileName);
 
-  // Premium users get higher priority and faster processing
-  const isPremium = isPremiumUser(req);
+	// Premium users get higher priority and faster processing
+	const isPremium = isPremiumUser(req);
 
-  // 1. URL → Direct download + convert
-  if (videoUrl) {
-    try {
-      console.log('Starting download + conversion (URL)...');
-      // downloadVideoWithYtdlpUltimate should return the path to the produced MP3
-      const producedPath = await downloadVideoWithYtdlpUltimate(videoUrl, '/tmp', isPremium);
+	// make producedPath available to the whole handler (avoid block-scope issues)
+	let producedPath = undefined;
 
-      if (!producedPath || !fs.existsSync(producedPath)) {
-        throw new Error('DOWNLOAD_FAILED: yt-dlp did not produce an output file.');
-      }
+	// 1. URL → Direct download + convert
+	if (videoUrl) {
+		try {
+			console.log('Starting download + conversion (URL)...');
+			// downloadVideoWithYtdlpUltimate should return the path to the produced MP3
+			producedPath = await downloadVideoWithYtdlpUltimate(videoUrl, '/tmp', isPremium);
 
-      // Copy to cache-named output path (atomic-ish)
-      try {
-        fs.copyFileSync(producedPath, outputFilePath);
-        console.log(`Cached converted file to ${outputFilePath}`);
-      } catch (copyErr) {
-        console.warn('Failed to copy produced file to cache:', copyErr.message);
-        // As a fallback, try to move/rename
-        try {
-          fs.renameSync(producedPath, outputFilePath);
-        } catch (renameErr) {
-          console.warn('Failed to move produced file to cache:', renameErr.message);
-          // If we can't copy or move, still attempt to serve producedPath directly (but we'll surface path)
-          // For safety, reject
-          throw new Error('CACHE_WRITE_FAILED');
-        }
-      }
+			// defensive: ensure producedPath is a non-empty string
+			if (!producedPath || typeof producedPath !== 'string') {
+				console.error('downloadVideoWithYtdlpUltimate returned invalid producedPath:', producedPath);
+				throw new Error('DOWNLOAD_FAILED: yt-dlp did not produce a valid output path.');
+			}
+			if (!fs.existsSync(producedPath)) {
+				console.error('Produced file does not exist on disk:', producedPath);
+				throw new Error('DOWNLOAD_FAILED: produced file missing on disk.');
+			}
 
-      // Clean up original produced file if different from cache
-      try {
-        if (producedPath !== outputFilePath && fs.existsSync(producedPath)) fs.unlinkSync(producedPath);
-      } catch (e) { /* ignore cleanup errors */ }
+			// Copy to cache-named output path (atomic-ish)
+			try {
+				console.log('Copying produced file to cache:', { producedPath, outputFilePath });
+				fs.copyFileSync(producedPath, outputFilePath);
+				console.log(`Cached converted file to ${outputFilePath}`);
+			} catch (copyErr) {
+				console.warn('Failed to copy produced file to cache:', copyErr && copyErr.message);
+				// As a fallback, try to move/rename (but ensure producedPath is defined)
+				try {
+					if (typeof producedPath === 'string' && producedPath) {
+						fs.renameSync(producedPath, outputFilePath);
+						console.log('Moved produced file to cache via rename.');
+					} else {
+						throw new Error('CACHE_MOVE_FAILED: invalid producedPath');
+					}
+				} catch (renameErr) {
+					console.warn('Failed to move produced file to cache:', renameErr && renameErr.message);
+					// If we can't copy or move, reject with a clear error
+					throw new Error('CACHE_WRITE_FAILED');
+				}
+			}
 
-      console.log('Download + conversion completed.');
-    } catch (error) {
-      console.error('Error during download + conversion:', error);
-      return res.status(500).json({ error: 'Failed to process video URL.', errorCode: 'PROCESSING_ERROR' });
-    }
-  }
+			// Clean up original produced file if different from cache
+			try {
+				if (producedPath && producedPath !== outputFilePath && fs.existsSync(producedPath)) {
+					fs.unlinkSync(producedPath);
+				}
+			} catch (e) { /* ignore cleanup errors */ }
 
-  // 2. File upload → Convert to MP3 directly
-  else if (fileUpload) {
-    try {
-      console.log('Starting direct conversion (file upload)...');
-      await convertToMp3Ultimate(inputFilePath, outputFilePath, isPremium);
-      console.log('Direct conversion completed.');
-      // cleanup uploaded file
-      try { if (fs.existsSync(inputFilePath)) fs.unlinkSync(inputFilePath); } catch (e) {}
-    } catch (error) {
-      console.error('Error during direct conversion:', error);
-      return res.status(500).json({ error: 'Failed to convert uploaded file.', errorCode: 'CONVERSION_ERROR' });
-    }
-  }
+			console.log('Download + conversion completed.');
+		} catch (error) {
+			console.error('Error during download + conversion:', error && error.stack ? error.stack : error);
+			return res.status(500).json({ error: 'Failed to process video URL.', errorCode: 'PROCESSING_ERROR', detail: error.message });
+		}
+	}
 
-  // Ensure the cached output exists before returning URL (extra logging)
-  if (!fs.existsSync(outputFilePath)) {
-    console.error('Expected cached output missing:', {
-      outputFilePath,
-      producedPath: typeof producedPath !== 'undefined' ? producedPath : '<<undefined>>',
-      CACHE_DIR
-    });
-    return res.status(500).json({ error: 'Converted file missing', errorCode: 'MISSING_OUTPUT' });
-  }
+	// 2. File upload → Convert to MP3 directly
+	else if (fileUpload) {
+		try {
+			console.log('Starting direct conversion (file upload)...');
+			await convertToMp3Ultimate(inputFilePath, outputFilePath, isPremium);
+			console.log('Direct conversion completed.');
+			// cleanup uploaded file
+			try { if (fs.existsSync(inputFilePath)) fs.unlinkSync(inputFilePath); } catch (e) {}
+			// set producedPath so later checks/logging have a value
+			producedPath = outputFilePath;
+		} catch (error) {
+			console.error('Error during direct conversion:', error && error.stack ? error.stack : error);
+			return res.status(500).json({ error: 'Failed to convert uploaded file.', errorCode: 'CONVERSION_ERROR', detail: error.message });
+		}
+	}
 
-  // Respond with the URL to the converted MP3 file (served from /file)
-  const fileUrl = `${req.protocol}://${req.get('host')}/file/${encodeURIComponent(outputFileName)}`;
-  res.json({ url: fileUrl, fileName: outputFileName });
+	// Ensure the cached output exists before returning URL (extra logging)
+	if (!fs.existsSync(outputFilePath)) {
+		console.error('Expected cached output missing:', {
+			outputFilePath,
+			producedPath: typeof producedPath !== 'undefined' ? producedPath : '<<undefined>>',
+			CACHE_DIR
+		});
+		return res.status(500).json({ error: 'Converted file missing', errorCode: 'MISSING_OUTPUT' });
+	}
+
+	// Respond with the URL to the converted MP3 file (served from /file)
+	const fileUrl = `${req.protocol}://${req.get('host')}/file/${encodeURIComponent(outputFileName)}`;
+	res.json({ url: fileUrl, fileName: outputFileName });
 }
 
 // Register both the original and the legacy frontend path to the same handler:
