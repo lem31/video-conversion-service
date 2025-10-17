@@ -1,60 +1,58 @@
-FROM node:18-bookworm
+# --- Builder stage: install dependencies and produce node_modules ---
+FROM node:18-bookworm AS builder
+WORKDIR /app
 
-# avoid prompts during apt operations
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+# Copy package files and install production deps reproducibly
+COPY package*.json ./
+RUN npm ci --only=production --no-audit --no-fund
+
+# Copy app sources (no build step assumed; if you have one, run it here)
+COPY . .
+
+# --- Final runtime stage: smaller surface, non-root user ---
+FROM node:18-bookworm-slim
+
+# Basic env + sensible defaults
+ENV NODE_ENV=production
+ENV MAX_CONCURRENT_DOWNLOADS=2
+ENV VIDEO_CACHE_DIR=/data/video_cache
 ENV PATH="/usr/local/bin:$PATH"
 ENV FFMPEG_PATH=/usr/bin/ffmpeg
 
-# Install system dependencies and build tools required for some pip packages
-# Added sqlite3 and libsqlite3-dev for browser cookie extraction support
+# Install only runtime packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ffmpeg \
   curl \
-  python3 \
-  python3-pip \
   ca-certificates \
-  libmp3lame-dev \
-  git \
-  build-essential \
-  python3-dev \
-  libssl-dev \
-  libffi-dev \
-  sqlite3 \
-  libsqlite3-dev \
   && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip tooling then install yt-dlp via pip
-# REPLACED: pip installs caused "externally-managed-environment" errors on some images.
-# Instead download the yt-dlp standalone binary and make it executable.
+# Create a non-root user and home dir
+RUN groupadd -r appuser && useradd -r -g appuser -d /home/appuser -s /sbin/nologin appuser \
+  && mkdir -p /home/appuser && chown -R appuser:appuser /home/appuser
+
+# Install yt-dlp standalone binary (avoid pip), keep executable
 RUN curl -fsSL -o /usr/local/bin/yt-dlp \
       https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
-  && chmod +x /usr/local/bin/yt-dlp \
+  && chmod 755 /usr/local/bin/yt-dlp \
   && /usr/local/bin/yt-dlp --version || true
 
-# Ensure yt-dlp is in PATH (pip usually installs to /usr/local/bin)
-ENV PATH="/usr/local/bin:$PATH"
+# Create cache directory owned by appuser (no 777)
+RUN mkdir -p /tmp && chmod 1777 /tmp \
+  && mkdir -p "${VIDEO_CACHE_DIR}" && chown -R appuser:appuser "${VIDEO_CACHE_DIR}"
 
-# Create temp directory with open permissions
-RUN mkdir -p /tmp && chmod 777 /tmp
-
-# Set working directory
+# App working directory
 WORKDIR /app
 
-# Install Node.js dependencies
-COPY package*.json ./
+# Copy built app and node_modules from builder, set ownership to appuser
+COPY --chown=appuser:appuser --from=builder /app /app
 
-# Keep npm install (safe if lockfile may be missing); switch to npm ci if you have package-lock.json and want reproducible installs
-RUN npm install --no-audit --no-fund
+# Switch to non-root user
+USER appuser
 
-# Copy app files
-COPY . .
-
-# Expose port and start app
+# Expose port and keep lightweight healthcheck
 EXPOSE 8080
-
-# Optional lightweight healthcheck
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD curl -fsS http://localhost:8080/health || exit 1
 
+# Use same start command as before
 CMD ["npm", "start"]
