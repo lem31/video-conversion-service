@@ -690,6 +690,9 @@ if (!fs.existsSync(CACHE_DIR)) {
   fs.mkdirSync(CACHE_DIR, { recursive: true });
 }
 
+// Serve cached/converted files under /file
+app.use('/file', express.static(CACHE_DIR));
+
 // New: start periodic cache cleaner (configurable via env)
 const { startCacheCleaner } = require('./cacheCleaner');
 const CACHE_CLEAN_DAYS = Number(process.env.CACHE_CLEAN_DAYS || 7); // default 7 days
@@ -748,8 +751,8 @@ function releaseDownloadSlot() {
 // --- Replace the inline app.post('/convert-video-to-mp3', ...) handler with a named function so we can reuse it ---
 // Move the entire body that was previously inside the inline async (req,res) => { ... } here:
 async function convertVideoHandler(req, res) {
-  // extract URL or file from request
-  let videoUrl = req.body.url;
+  // accept multiple possible field names from various frontends
+  let videoUrl = req.body.videoUrl || req.body.url || req.body.video;
   let fileUpload = req.files && req.files.length > 0 ? req.files[0] : null;
 
   // Validate input: must provide either a URL or a file
@@ -788,7 +791,35 @@ async function convertVideoHandler(req, res) {
   if (videoUrl) {
     try {
       console.log('Starting download + conversion (URL)...');
-      await downloadVideoWithYtdlpUltimate(videoUrl, CACHE_DIR, isPremium);
+      // downloadVideoWithYtdlpUltimate should return the path to the produced MP3
+      const producedPath = await downloadVideoWithYtdlpUltimate(videoUrl, '/tmp', isPremium);
+
+      if (!producedPath || !fs.existsSync(producedPath)) {
+        throw new Error('DOWNLOAD_FAILED: yt-dlp did not produce an output file.');
+      }
+
+      // Copy to cache-named output path (atomic-ish)
+      try {
+        fs.copyFileSync(producedPath, outputFilePath);
+        console.log(`Cached converted file to ${outputFilePath}`);
+      } catch (copyErr) {
+        console.warn('Failed to copy produced file to cache:', copyErr.message);
+        // As a fallback, try to move/rename
+        try {
+          fs.renameSync(producedPath, outputFilePath);
+        } catch (renameErr) {
+          console.warn('Failed to move produced file to cache:', renameErr.message);
+          // If we can't copy or move, still attempt to serve producedPath directly (but we'll surface path)
+          // For safety, reject
+          throw new Error('CACHE_WRITE_FAILED');
+        }
+      }
+
+      // Clean up original produced file if different from cache
+      try {
+        if (producedPath !== outputFilePath && fs.existsSync(producedPath)) fs.unlinkSync(producedPath);
+      } catch (e) { /* ignore cleanup errors */ }
+
       console.log('Download + conversion completed.');
     } catch (error) {
       console.error('Error during download + conversion:', error);
@@ -802,13 +833,15 @@ async function convertVideoHandler(req, res) {
       console.log('Starting direct conversion (file upload)...');
       await convertToMp3Ultimate(inputFilePath, outputFilePath, isPremium);
       console.log('Direct conversion completed.');
+      // cleanup uploaded file
+      try { if (fs.existsSync(inputFilePath)) fs.unlinkSync(inputFilePath); } catch (e) {}
     } catch (error) {
       console.error('Error during direct conversion:', error);
       return res.status(500).json({ error: 'Failed to convert uploaded file.', errorCode: 'CONVERSION_ERROR' });
     }
   }
 
-  // Respond with the URL to the converted MP3 file
+  // Respond with the URL to the converted MP3 file (served from /file)
   const fileUrl = `${req.protocol}://${req.get('host')}/file/${outputFileName}`;
   res.json({ url: fileUrl, fileName: outputFileName });
 }
