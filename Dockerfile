@@ -7,6 +7,7 @@ ENV PATH="/usr/local/bin:$PATH"
 ENV FFMPEG_PATH=/usr/bin/ffmpeg
 
 # Install system dependencies and build tools required for some pip packages
+# Added sqlite3 and libsqlite3-dev for browser cookie extraction support
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ffmpeg \
   curl \
@@ -19,6 +20,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   python3-dev \
   libssl-dev \
   libffi-dev \
+  sqlite3 \
+  libsqlite3-dev \
   && rm -rf /var/lib/apt/lists/*
 
 # Upgrade pip tooling then install yt-dlp via pip
