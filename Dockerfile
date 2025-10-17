@@ -43,6 +43,20 @@ RUN curl -fsSL -o /usr/local/bin/yt-dlp \
   && chmod 755 /usr/local/bin/yt-dlp \
   && /usr/local/bin/yt-dlp --version || true
 
+# Optional: build-time install of Cobalt Tools (off by default).
+# Usage:
+#   docker build --build-arg INSTALL_COBALT=1 \
+#                --build-arg COBALT_INSTALL_CMD="curl -fsSL <url> -o /usr/local/bin/cobalt && chmod +x /usr/local/bin/cobalt" .
+ARG INSTALL_COBALT=0
+ARG COBALT_INSTALL_CMD=""
+RUN if [ "$INSTALL_COBALT" = "1" ] && [ -n "$COBALT_INSTALL_CMD" ]; then \
+      echo "Installing Cobalt Tools via provided command..."; \
+      /bin/sh -c "$COBALT_INSTALL_CMD"; \
+      echo "Cobalt install finished"; \
+    else \
+      echo "Skipping Cobalt Tools install (INSTALL_COBALT=${INSTALL_COBALT})"; \
+    fi
+
 # Create cache directory owned by appuser (no 777)
 RUN mkdir -p /tmp && chmod 1777 /tmp \
   && mkdir -p "${VIDEO_CACHE_DIR}" && chown -R appuser:appuser "${VIDEO_CACHE_DIR}"
