@@ -483,7 +483,7 @@ if (!fs.existsSync(CACHE_DIR)) {
 }
 
 // New: start periodic cache cleaner (configurable via env)
-const { startCacheCleaner } = require('./scripts/cacheCleaner');
+const { startCacheCleaner } = require('./cacheCleaner');
 const CACHE_CLEAN_DAYS = Number(process.env.CACHE_CLEAN_DAYS || 7); // default 7 days
 const CACHE_CLEAN_INTERVAL_HOURS = Number(process.env.CACHE_CLEAN_INTERVAL_HOURS || 24); // default every 24h
 try {
