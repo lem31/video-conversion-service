@@ -178,8 +178,11 @@ function runYtDlp(args, cwd = '/tmp') {
 // New helper: stream yt-dlp -> ffmpeg to produce an MP3 without writing the source file
 async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, ytExtraArgs = [], playerClient = 'web') {
   return new Promise((resolve, reject) => {
+    // inactivity timeout (seconds) - configurable via env
+    const inactivitySeconds = Number(process.env.PIPE_INACTIVITY_TIMEOUT || 60);
+    const inactivityMs = Math.max(5, inactivitySeconds) * 1000;
+
     // build yt-dlp args that write media to stdout
-    // add --no-part to avoid .part file overhead and pass extractor client explicitly
     const ytdlpArgs = [
       '--no-playlist',
       '--no-warnings',
@@ -192,16 +195,15 @@ async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, 
       ...ytExtraArgs
     ];
 
-    // spawn yt-dlp
+    try {
+      console.log('yt-dlp ->', sanitizeArgsForLog(ytdlpArgs));
+    } catch (e) { /* ignore logging errors */ }
+
     const ytdlp = spawn('yt-dlp', ytdlpArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
-    // choose bitrate/quality consistent with convertToMp3Ultimate
-    // Default to high-quality encoding to avoid lowering audio quality.
-    // Configure via YTDLP_TARGET_BITRATE (e.g. "192k") if you want a different target.
     const bitrate = process.env.YTDLP_TARGET_BITRATE || '192k';
     const quality = process.env.YTDLP_TARGET_Q || (isPremium ? '2' : '2');
 
-    // spawn ffmpeg to read from stdin and write mp3 (add threads)
     const ffmpegArgs = [
       '-threads', '0',
       '-hide_banner',
@@ -223,45 +225,98 @@ async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, 
     ];
     const ff = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
 
-    const start = Date.now();
+    // activity watchdog
+    let lastActivity = Date.now();
+    let watchdog = null;
+    function resetWatchdog() {
+      lastActivity = Date.now();
+      if (watchdog) clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        const idle = (Date.now() - lastActivity);
+        if (idle >= inactivityMs) {
+          const msg = `PIPE_TIMEOUT: no activity for ${Math.round(idle/1000)}s (threshold ${inactivitySeconds}s)`;
+          console.warn(msg);
+          try { ytdlp.kill('SIGKILL'); } catch (e) { /* ignore */ }
+          try { ff.kill('SIGKILL'); } catch (e) { /* ignore */ }
+          cleanup();
+          reject(new Error(msg));
+        } else {
+          resetWatchdog();
+        }
+      }, inactivityMs + 50);
+    }
 
-    // pipe yt-dlp stdout into ffmpeg stdin
+    // data/err collectors for better diagnostics
+    let ffErr = '';
+    let ytdlpErr = '';
+    let bytesPiped = 0;
+
+    // reset on observable activity
+    ytdlp.stdout.on('data', (chunk) => {
+      bytesPiped += chunk.length;
+      resetWatchdog();
+    });
+    ff.stderr.on('data', (b) => {
+      ffErr += b.toString();
+      resetWatchdog();
+    });
+    ytdlp.stderr.on('data', (b) => {
+      ytdlpErr += b.toString();
+      resetWatchdog();
+    });
+
+    // pipe and lifecycle handlers
     ytdlp.stdout.pipe(ff.stdin);
 
-    let ffErr = '';
-    ff.stderr.on('data', (b) => { ffErr += b.toString(); });
+    function cleanup() {
+      try { ytdlp.stdout && ytdlp.stdout.removeAllListeners(); } catch(e){}
+      try { ytdlp.stderr && ytdlp.stderr.removeAllListeners(); } catch(e){}
+      try { ff.stderr && ff.stderr.removeAllListeners(); } catch(e){}
+      try { ff.stdin && ff.stdin.end(); } catch(e){}
+      if (watchdog) { clearTimeout(watchdog); watchdog = null; }
+    }
 
-    // if yt-dlp errors early, capture stderr
-    let ytdlpErr = '';
-    ytdlp.stderr.on('data', (b) => { ytdlpErr += b.toString(); });
-
-    ff.on('close', (code) => {
-      const dur = (Date.now() - start) / 1000;
-      console.log(`streamYtdlpToFfmpeg: total piped duration ${dur.toFixed(2)}s`);
-      // ensure yt-dlp process is terminated
-      try { ytdlp.kill(); } catch (e) {}
-      if (code === 0) return resolve();
-      const msg = ffErr || ytdlpErr || `ffmpeg exited ${code}`;
-      reject(new Error(`PIPED_FAILED: ${msg}`));
-    });
-
-    ff.on('error', (e) => {
-      try { ytdlp.kill(); } catch (er) {}
-      reject(e);
-    });
-
-    ytdlp.on('error', (e) => {
-      try { ff.kill(); } catch (er) {}
-      reject(e);
-    });
-
-    // safety: if yt-dlp exits early with non-zero, capture that
-    ytdlp.on('close', (yc) => {
-      if (yc !== 0) {
-        // let ffmpeg handle final failure; but if ff still running long, we can surface yt-dlp error
-        // nothing to do here explicitly
+    // If yt-dlp exits early, close ff.stdin so ffmpeg can finish consuming any buffer
+    ytdlp.on('close', (code, sig) => {
+      resetWatchdog();
+      if (code !== 0) {
+        // give ffmpeg a chance to finish if any data arrived
+        try {
+          if (ff.stdin && !ff.stdin.destroyed) ff.stdin.end();
+        } catch (e) {}
+        // do not immediately reject here — ffmpeg may finish; but capture ytdlpErr for diagnostics
+        console.warn(`yt-dlp exited with code ${code} (signal ${sig}). Waiting for ffmpeg to finish. stderr (trim):`, (ytdlpErr || '').trim().slice(0, 800));
+      } else {
+        // normal yt-dlp end — ensure we close ff stdin to let ffmpeg finalize
+        try { if (ff.stdin && !ff.stdin.destroyed) ff.stdin.end(); } catch (e) {}
       }
     });
+
+    ff.on('close', (code, sig) => {
+      cleanup();
+      const duration = ((Date.now() - lastActivity) / 1000).toFixed(2);
+      console.log(`streamYtdlpToFfmpeg: finished, bytes piped: ${bytesPiped}, ffmpeg exit code: ${code}`);
+      if (code === 0) return resolve();
+      // provide helpful stderr context
+      const ctx = `
+FFERR: ${ffErr.trim().slice(0,1500)}
+YTDLPERR: ${ytdlpErr.trim().slice(0,1500)}
+      `.trim();
+      return reject(new Error(`PIPED_FAILED (ffmpeg ${code}): ${ctx}`));
+    });
+
+    // immediate process errors
+    ytdlp.on('error', (e) => {
+      cleanup();
+      reject(new Error(`yt-dlp process error: ${e.message}`));
+    });
+    ff.on('error', (e) => {
+      cleanup();
+      reject(new Error(`ffmpeg process error: ${e.message}`));
+    });
+
+    // start watchdog
+    resetWatchdog();
   });
 }
 
