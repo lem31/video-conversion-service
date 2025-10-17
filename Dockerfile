@@ -14,7 +14,16 @@ RUN pip3 install --no-cache-dir requests curl_cffi yt-dlp
 # Install node deps and copy app
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --only=production
+
+# Use package-lock.json when available; fall back to npm install --omit=dev when not present.
+# This prevents `npm ci` from failing in environments without a lockfile.
+RUN if [ -f package-lock.json ]; then \
+      echo "Found package-lock.json → using npm ci"; \
+      npm ci --only=production; \
+    else \
+      echo "No package-lock.json → using npm install --omit=dev"; \
+      npm install --omit=dev --no-audit --no-fund; \
+    fi
 
 # Copy source
 COPY . .
