@@ -126,7 +126,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     const baseArgs = [
       '--no-playlist',
       '-x', '--audio-format', 'mp3',
-      '--format', 'bestaudio/best',
+      '--format', isPremium ? 'bestaudio/best' : 'bestaudio[abr<=128]/bestaudio/best',  // Prefer smaller files for standard
       '--output', outputTemplate,
       '--no-mtime',
 
@@ -344,8 +344,8 @@ function convertToMp3Ultimate(inputPath, outputPath, isPremium) {
     const label = isPremium ? 'ULTIMATE PREMIUM' : 'ULTRA-FAST';
     console.log(`${label} conversion...`);
 
-    const bitrate = isPremium ? '192k' : '128k';
-    const quality = isPremium ? '2' : '4';
+    const bitrate = isPremium ? '192k' : '96k';   // Faster for standard users
+    const quality = isPremium ? '2' : '6';        // Lower quality = faster conversion
 
     const ffmpeg = spawn('ffmpeg', [
       '-threads', '0',
