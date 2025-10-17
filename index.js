@@ -745,6 +745,78 @@ function releaseDownloadSlot() {
   // nothing could start; a later release will re-check
 }
 
+// --- Replace the inline app.post('/convert-video-to-mp3', ...) handler with a named function so we can reuse it ---
+// Move the entire body that was previously inside the inline async (req,res) => { ... } here:
+async function convertVideoHandler(req, res) {
+  // extract URL or file from request
+  let videoUrl = req.body.url;
+  let fileUpload = req.files && req.files.length > 0 ? req.files[0] : null;
+
+  // Validate input: must provide either a URL or a file
+  if (!videoUrl && !fileUpload) {
+    return res.status(400).json({ error: 'No video URL or file provided.', errorCode: 'INVALID_INPUT' });
+  }
+
+  // For debugging: log the entire request body and files
+  console.log('Request body:', req.body);
+  console.log('Files:', req.files);
+
+  // If URL is provided, validate and sanitize it
+  if (videoUrl) {
+    videoUrl = String(videoUrl).trim();
+    if (!isSupportedVideoUrl(videoUrl)) {
+      return res.status(400).json({ error: 'Unsupported video URL.', errorCode: 'INVALID_URL' });
+    }
+    console.log('Video URL:', videoUrl);
+  }
+
+  // If file is uploaded, use it directly
+  let inputFilePath = null;
+  if (fileUpload) {
+    inputFilePath = fileUpload.path;
+    console.log('File upload detected:', inputFilePath);
+  }
+
+  // Determine output file name and path
+  const outputFileName = `${uuidv4()}.mp3`;
+  const outputFilePath = path.join(CACHE_DIR, outputFileName);
+
+  // Premium users get higher priority and faster processing
+  const isPremium = isPremiumUser(req);
+
+  // 1. URL → Direct download + convert
+  if (videoUrl) {
+    try {
+      console.log('Starting download + conversion (URL)...');
+      await downloadVideoWithYtdlpUltimate(videoUrl, CACHE_DIR, isPremium);
+      console.log('Download + conversion completed.');
+    } catch (error) {
+      console.error('Error during download + conversion:', error);
+      return res.status(500).json({ error: 'Failed to process video URL.', errorCode: 'PROCESSING_ERROR' });
+    }
+  }
+
+  // 2. File upload → Convert to MP3 directly
+  else if (fileUpload) {
+    try {
+      console.log('Starting direct conversion (file upload)...');
+      await convertToMp3Ultimate(inputFilePath, outputFilePath, isPremium);
+      console.log('Direct conversion completed.');
+    } catch (error) {
+      console.error('Error during direct conversion:', error);
+      return res.status(500).json({ error: 'Failed to convert uploaded file.', errorCode: 'CONVERSION_ERROR' });
+    }
+  }
+
+  // Respond with the URL to the converted MP3 file
+  const fileUrl = `${req.protocol}://${req.get('host')}/file/${outputFileName}`;
+  res.json({ url: fileUrl, fileName: outputFileName });
+}
+
+// Register both the original and the legacy frontend path to the same handler:
+app.post('/convert-video-to-mp3', handleUpload, convertVideoHandler);
+app.post('/api/video-to-mp3', handleUpload, convertVideoHandler);
+
 // ...existing code for parseProxyEnv, handlers, health, etc. (file already contains these) ...
 
 // Ensure server start exists at bottom
