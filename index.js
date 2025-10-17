@@ -823,6 +823,15 @@ Object.keys(BINARIES).forEach(k => {
   }
 });
 
+function computeCacheKey(url, opts = {}) {
+  const hash = crypto.createHash('sha256');
+  hash.update(String(url));
+  // include relevant options to avoid collisions when you change output quality/format
+  if (opts.quality) hash.update(String(opts.quality));
+  if (opts.tier) hash.update(String(opts.tier));
+  return hash.digest('hex');
+}
+
 app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
   const tier = getUserTier(req);
   const premium = tier !== 'standard';
