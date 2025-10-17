@@ -54,17 +54,23 @@ function cleanVideoUrl(input) {
     // youtube.com: keep only v param if present, otherwise try /embed/ or /v/
     if (host.endsWith('youtube.com') || host.includes('youtube')) {
       const v = urlObj.searchParams.get('v');
-      if (v) return `https://www.youtube.com/watch?v=${v}`;
+      if (v) {
+        // Clean URL: only keep v and optionally t (timestamp) parameters
+        const cleanUrl = new URL('https://www.youtube.com/watch');
+        cleanUrl.searchParams.set('v', v);
+        const t = urlObj.searchParams.get('t');
+        if (t) cleanUrl.searchParams.set('t', t);
+        return cleanUrl.toString();
+      }
+
       const parts = urlObj.pathname.split('/').filter(Boolean);
       const embedIdx = parts.indexOf('embed');
       if (embedIdx !== -1 && parts[embedIdx + 1]) return `https://www.youtube.com/watch?v=${parts[embedIdx + 1]}`;
       const vIdx = parts.indexOf('v');
       if (vIdx !== -1 && parts[vIdx + 1]) return `https://www.youtube.com/watch?v=${parts[vIdx + 1]}`;
-      // fallback: remove list/start_radio/etc
-      const params = new URLSearchParams();
-      if (urlObj.searchParams.get('t')) params.set('t', urlObj.searchParams.get('t'));
-      const base = urlObj.origin + urlObj.pathname;
-      return params.toString() ? `${base}?${params.toString()}` : base;
+
+      // If no v param found, return original (might be a channel/playlist URL)
+      return raw;
     }
 
     // Vimeo / Dailymotion: return cleaned path-only form (no query extras)
@@ -279,18 +285,23 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       );
     }
 
+    // Only throw specific errors - most errors should have been handled by fallback layers
     if (msg.includes('This video is private') || msg.includes('Private video')) {
-      throw new Error('VIDEO_PRIVATE: Private video');
-    } else if (msg.includes('Sign in') || msg.includes('Login required') || msg.includes('age')) {
-      throw new Error('VIDEO_AGE_RESTRICTED: Age-restricted or login required');
-    } else if (msg.includes('404') || msg.includes('not found')) {
-      throw new Error('VIDEO_UNAVAILABLE: Video unavailable');
-    } else if (msg.includes('403') || msg.includes('copyright')) {
-      throw new Error('VIDEO_COPYRIGHT: Copyright or access denied');
-    } else if (msg.includes('429') || msg.toLowerCase().includes('rate')) {
-      throw new Error('RATE_LIMITED: Rate limited');
+      throw new Error('VIDEO_PRIVATE: This video is private and cannot be downloaded.');
+    } else if (msg.includes('age') && (msg.includes('restricted') || msg.includes('confirm your age'))) {
+      throw new Error('VIDEO_AGE_RESTRICTED: This video is age-restricted and requires authentication.');
+    } else if (msg.includes('members-only') || msg.includes('Join this channel')) {
+      throw new Error('VIDEO_MEMBERS_ONLY: This video is for channel members only.');
+    } else if (msg.includes('copyright') && msg.includes('blocked')) {
+      throw new Error('VIDEO_COPYRIGHT: This video is blocked due to copyright restrictions.');
+    } else if (msg.includes('HTTP Error 429')) {
+      throw new Error('RATE_LIMITED: Too many requests. Please try again in a few minutes.');
+    } else if (msg.includes('all 4 layers failed')) {
+      // All layers truly failed - this is a real issue
+      throw new Error('DOWNLOAD_FAILED: Unable to download after trying all available methods. This video may require special authentication or be temporarily unavailable.');
     } else {
-      throw new Error(`DOWNLOAD_FAILED: ${msg}`);
+      // Generic failure - but this should rarely happen since fallbacks should catch most issues
+      throw new Error(`VIDEO_UNAVAILABLE: Unable to download this video. It may be unavailable, deleted, or region-restricted.`);
     }
   }
 }
@@ -407,14 +418,6 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
       shouldCleanupInput = true;
 
       if (isSupportedVideoUrl(videoUrl)) {
-        const isVimeo = videoUrl.includes('vimeo.com');
-        if (isVimeo) {
-          return res.status(400).json({
-            error: 'Vimeo not supported',
-            errorCode: 'URL_UNSUPPORTED'
-          });
-        }
-
         try {
           inputPath = await downloadVideoWithYtdlpUltimate(videoUrl, '/tmp', premium);
 
