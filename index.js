@@ -270,6 +270,30 @@ if (PROXY_CONFIG) {
   console.log('No proxy configured via YTDLP_PROXY or YTDLP_RPXY_URL');
 }
 
+// --- New helper: decide whether to pass --proxy to yt-dlp for a given URL ---
+// Use env YTDLP_SKIP_PROXY_HOSTS (comma-separated, default: youtube hosts) to skip proxy for matching hosts.
+// Set YTDLP_FORCE_PROXY=1 to force proxy for all hosts regardless of skip list.
+function shouldUseProxyForUrl(url) {
+  try {
+    if (String(process.env.YTDLP_FORCE_PROXY || '').trim() === '1') return true;
+    const raw = String(url || '').trim();
+    if (!raw) return false;
+    const u = new URL(raw);
+    const host = u.hostname.toLowerCase();
+    const skip = (process.env.YTDLP_SKIP_PROXY_HOSTS || 'youtube.com,youtu.be').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    // if any skip token is contained in host, do NOT use proxy
+    for (const token of skip) {
+      if (host.includes(token)) {
+        return false;
+      }
+    }
+    return !!PROXY_CONFIG; // only use proxy if configured and not skipped
+  } catch (e) {
+    // on parse problems, fall back to using proxy only if explicitly configured and forced
+    return !!PROXY_CONFIG && String(process.env.YTDLP_FORCE_PROXY || '').trim() === '1';
+  }
+}
+
 // New helper: stream yt-dlp -> ffmpeg to produce an MP3 without writing the source file
 async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, ytExtraArgs = [], playerClient = 'web') {
   return new Promise((resolve, reject) => {
@@ -434,6 +458,16 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       console.log('No cookies configured. Relying on multi-layer fallback system.');
     }
 
+    // Add proxy to yt-dlp args only when configured and allowed for this URL
+    if (PROXY_CONFIG) {
+      if (shouldUseProxyForUrl(cleanedUrl)) {
+        extraArgs.push('--proxy', PROXY_CONFIG.raw);
+        console.log(`Using proxy for yt-dlp: ${PROXY_CONFIG.protocol}://${PROXY_CONFIG.host}:${PROXY_CONFIG.port}`);
+      } else {
+        console.log(`Skipping proxy for host of URL: ${cleanedUrl} (YTDLP_SKIP_PROXY_HOSTS=${process.env.YTDLP_SKIP_PROXY_HOSTS || 'youtube.com,youtu.be'})`);
+      }
+    }
+
     // use PROXY_CONFIG.raw when available
     if (PROXY_CONFIG) extraArgs.push('--proxy', PROXY_CONFIG.raw);
 
@@ -446,7 +480,11 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       const ytExtraArgsForPipe = [];
       if (process.env.YTDLP_COOKIES) ytExtraArgsForPipe.push('--cookies', process.env.YTDLP_COOKIES);
       else if (process.env.YTDLP_BROWSER) ytExtraArgsForPipe.push('--cookies-from-browser', process.env.YTDLP_BROWSER);
-      if (PROXY_CONFIG) ytExtraArgsForPipe.push('--proxy', PROXY_CONFIG.raw);
+      if (PROXY_CONFIG && shouldUseProxyForUrl(cleanedUrl)) {
+        ytExtraArgsForPipe.push('--proxy', PROXY_CONFIG.raw);
+      } else if (PROXY_CONFIG) {
+        console.log('PIPED PATH: skipping proxy for this URL per YTDLP_SKIP_PROXY_HOSTS');
+      }
 
       try {
         console.log('Attempting fast piped yt-dlp -> ffmpeg path (no intermediate file)...');
@@ -480,7 +518,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
         ];
 
         if (process.env.YTDLP_COOKIES) tvFallback.push('--cookies', process.env.YTDLP_COOKIES);
-        if (PROXY_CONFIG) tvFallback.push('--proxy', PROXY_CONFIG.raw);
+        if (PROXY_CONFIG && shouldUseProxyForUrl(cleanedUrl)) tvFallback.push('--proxy', PROXY_CONFIG.raw);
 
         await runYtDlp(tvFallback, '/tmp');
         console.log('SUCCESS: TV embedded client fallback worked!');
@@ -503,7 +541,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
           ];
 
           if (process.env.YTDLP_COOKIES) safariFallback.push('--cookies', process.env.YTDLP_COOKIES);
-          if (PROXY_CONFIG) safariFallback.push('--proxy', PROXY_CONFIG.raw);
+          if (PROXY_CONFIG && shouldUseProxyForUrl(cleanedUrl)) safariFallback.push('--proxy', PROXY_CONFIG.raw);
 
           await runYtDlp(safariFallback, '/tmp');
           console.log('SUCCESS: Web Safari client fallback worked!');
@@ -528,7 +566,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
           ];
 
           if (process.env.YTDLP_COOKIES) embeddedFallback.push('--cookies', process.env.YTDLP_COOKIES);
-          if (PROXY_CONFIG) embeddedFallback.push('--proxy', PROXY_CONFIG.raw);
+          if (PROXY_CONFIG && shouldUseProxyForUrl(cleanedUrl)) embeddedFallback.push('--proxy', PROXY_CONFIG.raw);
 
           await runYtDlp(embeddedFallback, '/tmp');
           console.log('SUCCESS: Web embedded fallback worked!');
@@ -562,7 +600,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
             cleanedUrl
           ];
           if (process.env.YTDLP_COOKIES) hlsArgs.push('--cookies', process.env.YTDLP_COOKIES);
-          if (PROXY_CONFIG) hlsArgs.push('--proxy', PROXY_CONFIG.raw);
+          if (PROXY_CONFIG && shouldUseProxyForUrl(cleanedUrl)) hlsArgs.push('--proxy', PROXY_CONFIG.raw);
 
           await runYtDlp(hlsArgs, '/tmp');
           console.log('SUCCESS: HLS-friendly retry worked!');
