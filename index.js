@@ -135,15 +135,8 @@ function runYtDlp(args, cwd = '/tmp') {
     let stdout = '';
     let stderr = '';
 
-    proc.stdout.on('data', chunk => {
-      const s = chunk.toString();
-      stdout += s;
-    });
-
-    proc.stderr.on('data', chunk => {
-      const s = chunk.toString();
-      stderr += s;
-    });
+    proc.stdout.on('data', chunk => { stdout += chunk.toString(); });
+    proc.stderr.on('data', chunk => { stderr += chunk.toString(); });
 
     proc.on('error', err => reject(err));
     proc.on('close', async (code) => {
@@ -151,60 +144,88 @@ function runYtDlp(args, cwd = '/tmp') {
 
       // Log stderr for debugging
       try {
-        console.warn('yt-dlp failed (code %d). stderr:', code, stderr.toString().trim().slice(0, 1000));
-        if (stdout && stdout.trim()) console.warn('yt-dlp stdout (trim):', stdout.toString().trim().slice(0, 1000));
+        console.warn('yt-dlp failed (code %d). stderr:', code, (stderr || '').trim().slice(0, 1000));
+        if (stdout && stdout.trim()) console.warn('yt-dlp stdout (trim):', stdout.trim().slice(0, 1000));
       } catch (e) { /* ignore logging errors */ }
 
-      // If failure is caused by missing HTTPS-proxy support in yt-dlp (requests/curl_cffi),
-      // attempt a single retry by downgrading an https:// proxy to http:// when safe.
-      const needHttpsDeps = (stderr || '').includes('To use an HTTPS proxy for this request') ||
-                            (stderr || '').includes('one of the following dependencies needs to be installed: requests, curl_cffi');
+      const fullErr = (stderr || '') + (stdout || '');
+
+      // 1) Existing fallback: missing HTTPS-proxy dependencies -> try downgrading https:// to http://
+      const needHttpsDeps = fullErr.includes('To use an HTTPS proxy for this request') ||
+                            fullErr.includes('one of the following dependencies needs to be installed: requests, curl_cffi');
 
       if (needHttpsDeps) {
         try {
-          // find --proxy arg
           const pi = args.findIndex(a => a === '--proxy');
           if (pi !== -1 && args[pi + 1] && typeof args[pi + 1] === 'string' && args[pi + 1].toLowerCase().startsWith('https://')) {
             const originalProxy = args[pi + 1];
             const downgradedProxy = originalProxy.replace(/^https:/i, 'http:');
-            console.log(`yt-dlp reported missing HTTPS proxy dependencies. Retrying once with downgraded proxy scheme: ${downgradedProxy}`);
+            console.log(`yt-dlp reported missing HTTPS proxy deps — retrying once with http proxy: ${downgradedProxy}`);
             const retryArgs = args.slice();
             retryArgs[pi + 1] = downgradedProxy;
-
-            // spawn retry (asynchronously)
             try {
-              const retryResult = await (new Promise((res, rej) => {
-                try {
-                  console.log('yt-dlp (retry) ->', sanitizeArgsForLog(retryArgs));
-                } catch (e) {}
+              const retryResult = await new Promise((res, rej) => {
+                try { console.log('yt-dlp (retry) ->', sanitizeArgsForLog(retryArgs)); } catch (e) {}
                 const p2 = spawn('yt-dlp', retryArgs, { cwd });
-                let o2 = '';
-                let e2 = '';
-                p2.stdout.on('data', c => { o2 += c.toString(); });
-                p2.stderr.on('data', c => { e2 += c.toString(); });
-                p2.on('error', err2 => rej(err2));
-                p2.on('close', code2 => {
-                  if (code2 === 0) return res({ stdout: o2, stderr: e2 });
-                  const errObj = new Error(`yt-dlp retry exit ${code2}: ${e2 || o2}`);
-                  errObj.code = code2;
-                  errObj.stdout = o2;
-                  errObj.stderr = e2;
-                  return rej(errObj);
-                });
-              }));
-              // success on retry
+                let o2 = '', e2 = '';
+                p2.stdout.on('data', c => o2 += c.toString());
+                p2.stderr.on('data', c => e2 += c.toString());
+                p2.on('error', rej);
+                p2.on('close', code2 => code2 === 0 ? res({ stdout: o2, stderr: e2 }) : rej(Object.assign(new Error(`yt-dlp retry exit ${code2}`), { code: code2, stdout: o2, stderr: e2 })));
+              });
               return resolve(retryResult);
             } catch (retryErr) {
-              // retry failed — fall through to reject with original context below
-              console.warn('yt-dlp retry with http proxy failed:', (retryErr && retryErr.message) || retryErr);
+              console.warn('Retry with downgraded proxy failed:', retryErr && retryErr.message);
             }
           }
-        } catch (retryErr) {
-          // ignore retry assembly errors and continue to reject original
-          console.warn('Error while attempting yt-dlp https->http retry:', retryErr && retryErr.message);
+        } catch (ex) { console.warn('Error while attempting https->http retry:', ex && ex.message); }
+      }
+
+      // 2) New: detect proxy connection failures (tunnel/ProxyError) and retry once WITHOUT --proxy
+      const proxyFailureIndicators = [
+        'Unable to connect to proxy',
+        'Tunnel connection failed',
+        'ProxyError',
+        'Tunnel connection failed: 404',
+        'Tunnel connection failed: 403'
+      ];
+      const isProxyFailure = proxyFailureIndicators.some(p => fullErr.includes(p));
+
+      if (isProxyFailure) {
+        try {
+          const pi = args.findIndex(a => a === '--proxy');
+          if (pi !== -1) {
+            console.warn('Detected proxy connection failure in yt-dlp stderr — retrying once without --proxy to avoid a permanent failure.');
+            const retryArgs = [];
+            for (let i = 0; i < args.length; i++) {
+              if (i === pi) { i++; continue; } // skip --proxy and its value
+              retryArgs.push(args[i]);
+            }
+            try {
+              const retryResult = await new Promise((res, rej) => {
+                try { console.log('yt-dlp (retry without proxy) ->', sanitizeArgsForLog(retryArgs)); } catch (e) {}
+                const p2 = spawn('yt-dlp', retryArgs, { cwd });
+                let o2 = '', e2 = '';
+                p2.stdout.on('data', c => o2 += c.toString());
+                p2.stderr.on('data', c => e2 += c.toString());
+                p2.on('error', rej);
+                p2.on('close', code2 => code2 === 0 ? res({ stdout: o2, stderr: e2 }) : rej(Object.assign(new Error(`yt-dlp retry without proxy exit ${code2}`), { code: code2, stdout: o2, stderr: e2 })));
+              });
+              console.log('yt-dlp retry without proxy succeeded — proxy appears misconfigured or unreachable.');
+              return resolve(retryResult);
+            } catch (retryErr) {
+              console.warn('yt-dlp retry without proxy failed:', retryErr && retryErr.message);
+              // fall-through to reject original error below
+            }
+          } else {
+            console.warn('Proxy failure detected but no --proxy arg present; cannot retry without proxy.');
+          }
+        } catch (ex) {
+          console.warn('Error while attempting yt-dlp retry without proxy:', ex && ex.message);
         }
       }
 
+      // No special recovery succeeded — return original error context
       const err = new Error(`yt-dlp exit ${code}: ${stderr || stdout}`);
       err.code = code;
       err.stdout = stdout;
