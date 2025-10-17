@@ -313,6 +313,12 @@ function shouldUseProxyForUrl(url) {
 // New helper: stream yt-dlp -> ffmpeg to produce an MP3 without writing the source file
 async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, ytExtraArgs = [], playerClient = 'web') {
   return new Promise((resolve, reject) => {
+    try {
+      ensurePathArg('outputPath', outputPath);
+    } catch (e) {
+      return reject(e);
+    }
+
     // build yt-dlp args that write media to stdout
     const ytdlpArgs = [
       '--no-playlist',
@@ -661,6 +667,9 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
 
 async function downloadDirectVideo(videoUrl, outputPath) {
   try {
+    // validate
+    ensurePathArg('outputPath', outputPath);
+
     const axiosOptions = {
       method: 'GET',
       url: videoUrl,
@@ -702,6 +711,13 @@ async function downloadDirectVideo(videoUrl, outputPath) {
 // ULTIMATE: Direct FFmpeg spawn for maximum speed
 function convertToMp3Ultimate(inputPath, outputPath, isPremium) {
   return new Promise((resolve, reject) => {
+    try {
+      ensurePathArg('inputPath', inputPath);
+      ensurePathArg('outputPath', outputPath);
+    } catch (e) {
+      return reject(e);
+    }
+
     const label = isPremium ? 'ULTIMATE PREMIUM' : 'ULTRA-FAST';
     console.log(`${label} conversion...`);
 
@@ -884,9 +900,13 @@ async function convertVideoHandler(req, res) {
     }
   }
 
-  // Ensure the cached output exists before returning URL
+  // Ensure the cached output exists before returning URL (extra logging)
   if (!fs.existsSync(outputFilePath)) {
-    console.error('Expected cached output missing:', outputFilePath);
+    console.error('Expected cached output missing:', {
+      outputFilePath,
+      producedPath: typeof producedPath !== 'undefined' ? producedPath : '<<undefined>>',
+      CACHE_DIR
+    });
     return res.status(500).json({ error: 'Converted file missing', errorCode: 'MISSING_OUTPUT' });
   }
 
@@ -899,7 +919,36 @@ async function convertVideoHandler(req, res) {
 app.post('/convert-video-to-mp3', handleUpload, convertVideoHandler);
 app.post('/api/video-to-mp3', handleUpload, convertVideoHandler);
 
-// ...existing code for parseProxyEnv, handlers, health, etc. (file already contains these) ...
+// helper to validate path args
+function ensurePathArg(name, p) {
+  if (typeof p !== 'string' || p.trim() === '') {
+    const err = new Error(`INVALID_PATH_ARG: ${name} is required and must be a non-empty string`);
+    err.code = 'INVALID_PATH_ARG';
+    throw err;
+  }
+}
+
+// Explicit global error handler (last middleware)
+app.use((err, req, res, next) => {
+  try {
+    console.error('GLOBAL_ERROR_HANDLER:', err && err.stack ? err.stack : err);
+  } catch (e) { console.error('Error logging failure', e); }
+  if (!res.headersSent) {
+    res.status(500).json({ error: 'INTERNAL_ERROR', message: err && err.message ? err.message : 'Unknown error' });
+  } else {
+    // if headers already sent, close connection
+    try { res.end(); } catch (e) {}
+  }
+});
+
+// Process-level handlers to capture any uncaught issues
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT_EXCEPTION', err && err.stack ? err.stack : err);
+  // optional: graceful shutdown could be implemented here
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('UNHANDLED_REJECTION', reason && reason.stack ? reason.stack : reason);
+});
 
 // Ensure server start exists at bottom
 app.listen(port, () => {
