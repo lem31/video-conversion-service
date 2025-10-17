@@ -466,7 +466,8 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       console.log('No cookies configured. Relying on multi-layer fallback system.');
     }
 
-    if (process.env.YTDLP_PROXY) extraArgs.push('--proxy', process.env.YTDLP_PROXY);
+    // Use parsed PROXY_CONFIG (supports YTDLP_RPXY_URL when YTDLP_USE_RPXY=1) for yt-dlp proxy arg
+    if (PROXY_CONFIG) extraArgs.push('--proxy', PROXY_CONFIG.raw);
 
     // Keep track of last yt-dlp error to decide on special HLS retry
     let lastYtdlpError = null;
@@ -483,7 +484,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       const ytExtraArgsForPipe = [];
       if (process.env.YTDLP_COOKIES) ytExtraArgsForPipe.push('--cookies', process.env.YTDLP_COOKIES);
       else if (process.env.YTDLP_BROWSER) ytExtraArgsForPipe.push('--cookies-from-browser', process.env.YTDLP_BROWSER);
-      if (process.env.YTDLP_PROXY) ytExtraArgsForPipe.push('--proxy', process.env.YTDLP_PROXY);
+      if (PROXY_CONFIG) ytExtraArgsForPipe.push('--proxy', PROXY_CONFIG.raw);
 
       // Forward cobalt external-downloader args to the piped invocation when enabled and available
       if (process.env.YTDLP_USE_COBALT === '1' && BINARIES['cobalt'] && BINARIES['cobalt'].ok) {
@@ -528,7 +529,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
         ];
 
         if (process.env.YTDLP_COOKIES) tvFallback.push('--cookies', process.env.YTDLP_COOKIES);
-        if (process.env.YTDLP_PROXY) tvFallback.push('--proxy', process.env.YTDLP_PROXY);
+        if (PROXY_CONFIG) tvFallback.push('--proxy', PROXY_CONFIG.raw);
 
         await runYtDlp(tvFallback, '/tmp');
         console.log('SUCCESS: TV embedded client fallback worked!');
@@ -551,7 +552,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
           ];
 
           if (process.env.YTDLP_COOKIES) safariFallback.push('--cookies', process.env.YTDLP_COOKIES);
-          if (process.env.YTDLP_PROXY) safariFallback.push('--proxy', process.env.YTDLP_PROXY);
+          if (PROXY_CONFIG) safariFallback.push('--proxy', PROXY_CONFIG.raw);
 
           await runYtDlp(safariFallback, '/tmp');
           console.log('SUCCESS: Web Safari client fallback worked!');
@@ -576,7 +577,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
           ];
 
           if (process.env.YTDLP_COOKIES) embeddedFallback.push('--cookies', process.env.YTDLP_COOKIES);
-          if (process.env.YTDLP_PROXY) embeddedFallback.push('--proxy', process.env.YTDLP_PROXY);
+          if (PROXY_CONFIG) embeddedFallback.push('--proxy', PROXY_CONFIG.raw);
 
           await runYtDlp(embeddedFallback, '/tmp');
           console.log('SUCCESS: Web embedded fallback worked!');
@@ -610,7 +611,7 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
             cleanedUrl
           ];
           if (process.env.YTDLP_COOKIES) hlsArgs.push('--cookies', process.env.YTDLP_COOKIES);
-          if (process.env.YTDLP_PROXY) hlsArgs.push('--proxy', process.env.YTDLP_PROXY);
+          if (PROXY_CONFIG) hlsArgs.push('--proxy', PROXY_CONFIG.raw);
 
           await runYtDlp(hlsArgs, '/tmp');
           console.log('SUCCESS: HLS-friendly retry worked!');
