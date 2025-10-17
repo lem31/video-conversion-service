@@ -1,11 +1,7 @@
 # Minimal Node image with Python + requests/curl_cffi to support yt-dlp HTTPS proxy usage.
 FROM node:18-bookworm-slim
 
-# Install minimal system deps and Python/pip
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-      python3 python3-pip ca-certificates ffmpeg wget && \
-    rm -rf /var/lib/apt/lists/*
+
 
 # Install Python 3.11 and venv tools
 RUN apt-get update && \
