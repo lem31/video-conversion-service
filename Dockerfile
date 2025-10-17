@@ -1,22 +1,21 @@
 # Minimal Node image with Python + requests/curl_cffi to support yt-dlp HTTPS proxy usage.
 FROM node:18-bookworm-slim
 
-
-
-# Install Python 3.11 and venv tools
+# Install minimal system deps and Python/pip
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      python3.11 python3.11-venv ca-certificates ffmpeg wget && \
-    ln -sf /usr/bin/python3.11 /usr/bin/python3 && \
+      python3 python3-pip python3-venv ca-certificates ffmpeg wget && \
     rm -rf /var/lib/apt/lists/*
 
-# Create and activate virtual environment
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Create an isolated virtualenv and install Python deps there to avoid
+# "externally-managed-environment" (PEP 668) errors when installing system-wide.
+RUN python3 -m venv /opt/pyenv && \
+    /opt/pyenv/bin/pip install --upgrade pip setuptools wheel && \
+    /opt/pyenv/bin/pip install --no-cache-dir requests curl_cffi yt-dlp && \
+    rm -rf /root/.cache /var/lib/apt/lists/*
 
-# Install Python packages inside the venv
-RUN pip install --no-cache-dir requests curl_cffi yt-dlp
-
+# Put venv binaries (yt-dlp, pip, etc.) on PATH
+ENV PATH="/opt/pyenv/bin:${PATH}"
 
 # Install node deps and copy app
 WORKDIR /app
