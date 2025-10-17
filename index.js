@@ -21,21 +21,9 @@ const upload = multer({
 
 // Premium feature flag from request headers
 function isPremiumUser(req) {
-  // kept for backward-compatibility; uses getUserTier below
-  return getUserTier(req) !== 'standard';
-}
-
-// New: return normalized tier string for a request: 'standard' | 'premium' | 'business' | 'enterprise'
-function getUserTier(req) {
-  try {
-    const raw = (req.headers['x-user-tier'] || '').toString().trim().toLowerCase();
-    if (raw === 'enterprise') return 'enterprise';
-    if (raw === 'business') return 'business';
-    if (raw === 'premium') return 'premium';
-    return 'standard';
-  } catch {
-    return 'standard';
-  }
+  return req.headers['x-user-tier'] === 'premium' ||
+         req.headers['x-user-tier'] === 'business' ||
+         req.headers['x-user-tier'] === 'enterprise';
 }
 
 function isSupportedVideoUrl(url) {
@@ -179,15 +167,12 @@ function runYtDlp(args, cwd = '/tmp') {
 async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, ytExtraArgs = [], playerClient = 'web') {
   return new Promise((resolve, reject) => {
     // build yt-dlp args that write media to stdout
-    // add --no-part to avoid .part file overhead and pass extractor client explicitly
     const ytdlpArgs = [
       '--no-playlist',
       '--no-warnings',
-      '--no-part',
-      '--newline',
-      '--extractor-args', `youtube:player_client=${playerClient}`,
       '-f', ytFormat,
       '-o', '-', // stream to stdout
+      // keep extractor client minimal; caller may append extractor args if needed
       cleanedUrl,
       ...ytExtraArgs
     ];
@@ -196,10 +181,8 @@ async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, 
     const ytdlp = spawn('yt-dlp', ytdlpArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
     // choose bitrate/quality consistent with convertToMp3Ultimate
-    // Default to high-quality encoding to avoid lowering audio quality.
-    // Configure via YTDLP_TARGET_BITRATE (e.g. "192k") if you want a different target.
-    const bitrate = process.env.YTDLP_TARGET_BITRATE || '192k';
-    const quality = process.env.YTDLP_TARGET_Q || (isPremium ? '2' : '2');
+    const bitrate = isPremium ? '192k' : '96k';
+    const quality = isPremium ? '2' : '6';
 
     // spawn ffmpeg to read from stdin and write mp3
     const ffmpegArgs = [
@@ -299,10 +282,10 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     }
 
     // LAYER 1: Web client with optimized settings (no PO Token needed)
-    // Always prefer the best audio stream to avoid lowering quality.
-    // If you want to tweak speed vs quality you can adjust format selection separately,
-    // but by default we request the best available audio.
-    const formatString = 'bestaudio/best';
+    // choose a slightly different format string when preferring m4a for speed
+    const formatString = isPremium
+      ? 'bestaudio/best'
+      : (preferM4aForShort ? 'bestaudio[ext=m4a][abr<=160]/bestaudio[abr<=128]/bestaudio/best' : 'bestaudio[abr<=128]/bestaudio/best');
 
     // Determine which yt-dlp player_client to use for the primary attempt.
     // You can force a client via env: PREFERRED_YTDLP_CLIENT=web_safari (or tv_embedded, web_embedded, web)
@@ -345,18 +328,6 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       cleanedUrl
     ];
 
-    // Optional: enable a permitted external downloader (Cobalt Tools) for parallel segmented downloads.
-    // Enable with YTDLP_USE_COBALT=1. Tune downloader name and args via YTDLP_COBALT_NAME and YTDLP_COBALT_ARGS.
-    if (process.env.YTDLP_USE_COBALT === '1') {
-      const cobaltName = process.env.YTDLP_COBALT_NAME || 'cobalt';
-      const cobaltArgsRaw = process.env.YTDLP_COBALT_ARGS || '--parallel 8';
-      baseArgs.push('--external-downloader', cobaltName, '--external-downloader-args', cobaltArgsRaw);
-      console.log(`yt-dlp configured to use external downloader: ${cobaltName} ${cobaltArgsRaw}`);
-    }
-
-    // NOTE: external segmented downloader support (aria2) removed for Railway compatibility.
-    // If you want to enable a permitted external downloader later, add it here.
-
     const extraArgs = [];
 
     // Use cookies.txt file if YTDLP_COOKIES env var is set
@@ -392,13 +363,6 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
       if (process.env.YTDLP_COOKIES) ytExtraArgsForPipe.push('--cookies', process.env.YTDLP_COOKIES);
       else if (process.env.YTDLP_BROWSER) ytExtraArgsForPipe.push('--cookies-from-browser', process.env.YTDLP_BROWSER);
       if (process.env.YTDLP_PROXY) ytExtraArgsForPipe.push('--proxy', process.env.YTDLP_PROXY);
-
-      // Forward cobalt external-downloader args to the piped invocation when enabled
-      if (process.env.YTDLP_USE_COBALT === '1') {
-        const cobaltName = process.env.YTDLP_COBALT_NAME || 'cobalt';
-        const cobaltArgsRaw = process.env.YTDLP_COBALT_ARGS || '--parallel 8';
-        ytExtraArgsForPipe.push('--external-downloader', cobaltName, '--external-downloader-args', cobaltArgsRaw);
-      }
 
       try {
         console.log('Attempting fast piped yt-dlp -> ffmpeg path (no intermediate file)...');
@@ -660,9 +624,8 @@ function convertToMp3Ultimate(inputPath, outputPath, isPremium) {
     const label = isPremium ? 'ULTIMATE PREMIUM' : 'ULTRA-FAST';
     console.log(`${label} conversion...`);
 
-    // Keep quality high by default. Use YTDLP_TARGET_BITRATE and YTDLP_TARGET_Q to override.
-    const bitrate = process.env.YTDLP_TARGET_BITRATE || '192k';
-    const quality = process.env.YTDLP_TARGET_Q || (isPremium ? '2' : '2');
+    const bitrate = isPremium ? '192k' : '96k';   // Faster for standard users
+    const quality = isPremium ? '2' : '6';        // Lower quality = faster conversion
 
     const ffmpeg = spawn('ffmpeg', [
       '-threads', '0',
@@ -729,48 +692,36 @@ try {
   console.warn('Failed to start cache cleaner:', e.message);
 }
 
-// Concurrency limiter for downloads (tier-aware semaphore)
+// Concurrency limiter for downloads (simple semaphore)
 const MAX_CONCURRENT_DOWNLOADS = Number(process.env.MAX_CONCURRENT_DOWNLOADS || 2);
-const BUSINESS_MAX_CONCURRENT_DOWNLOADS = Number(process.env.BUSINESS_MAX_CONCURRENT_DOWNLOADS || 10);
-const ENTERPRISE_MAX_CONCURRENT_DOWNLOADS = Number(process.env.ENTERPRISE_MAX_CONCURRENT_DOWNLOADS || 50);
 let currentDownloads = 0;
-// queue holds { resolve, tier } entries
 const downloadQueue = [];
 
-function getLimitForTier(tier) {
-  if (tier === 'enterprise') return ENTERPRISE_MAX_CONCURRENT_DOWNLOADS;
-  if (tier === 'business') return BUSINESS_MAX_CONCURRENT_DOWNLOADS;
-  // premium falls back to standard limit (no special batch allowance unless you set BUSINESS/ENTERPRISE)
-  return MAX_CONCURRENT_DOWNLOADS;
-}
-
-function acquireDownloadSlot(tier = 'standard') {
-  const limit = getLimitForTier(tier);
+function acquireDownloadSlot() {
   return new Promise((resolve) => {
-    if (currentDownloads < limit) {
+    if (currentDownloads < MAX_CONCURRENT_DOWNLOADS) {
       currentDownloads++;
       return resolve();
     }
-    downloadQueue.push({ resolve, tier });
+    downloadQueue.push(resolve);
   });
 }
 
 function releaseDownloadSlot() {
   currentDownloads = Math.max(0, currentDownloads - 1);
-  if (downloadQueue.length === 0) return;
-
-  // Find the first queued entry whose tier limit allows starting now.
-  for (let i = 0; i < downloadQueue.length; i++) {
-    const entry = downloadQueue[i];
-    const entryLimit = getLimitForTier(entry.tier);
-    if (currentDownloads < entryLimit) {
-      downloadQueue.splice(i, 1);
-      currentDownloads++;
-      try { entry.resolve(); } catch (e) { /* ignore */ }
-      return;
-    }
+  const next = downloadQueue.shift();
+  if (next) {
+    currentDownloads++;
+    next();
   }
-  // nothing could start; a later release will re-check
+}
+
+function computeCacheKey(url, opts = {}) {
+  const hash = crypto.createHash('sha256');
+  // include relevant options in the cache key if you support bitrate/format choices later
+  hash.update(String(url));
+  if (opts.quality) hash.update(String(opts.quality));
+  return hash.digest('hex');
 }
 
 // --- New helper: parse and validate YTDLP_PROXY env ---
@@ -828,18 +779,8 @@ Object.keys(BINARIES).forEach(k => {
   }
 });
 
-function computeCacheKey(url, opts = {}) {
-  const hash = crypto.createHash('sha256');
-  hash.update(String(url));
-  // include relevant options to avoid collisions when you change output quality/format
-  if (opts.quality) hash.update(String(opts.quality));
-  if (opts.tier) hash.update(String(opts.tier));
-  return hash.digest('hex');
-}
-
 app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
-  const tier = getUserTier(req);
-  const premium = tier !== 'standard';
+  const premium = isPremiumUser(req);
   console.log(`ULTIMATE conversion request - ${premium ? 'PREMIUM' : 'STANDARD'} user`);
   console.log('Request body:', req.body);
   console.log('Request files:', req.files);
@@ -902,8 +843,8 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
           });
         }
 
-        // Acquire a download slot before expensive work (tier-aware)
-        await acquireDownloadSlot(tier);
+        // Acquire a download slot before expensive work
+        await acquireDownloadSlot();
         let downloadedPath = null;
         try {
           // perform actual download + conversion (this will produce a file path)
