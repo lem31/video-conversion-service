@@ -28,7 +28,6 @@ ENV FFMPEG_PATH=/usr/bin/ffmpeg
 # Install only runtime packages (ensure python3 present for yt-dlp)
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ffmpeg \
-  aria2 \
   curl \
   ca-certificates \
   python3 \
