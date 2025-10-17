@@ -2,9 +2,15 @@
 FROM node:18-bookworm AS builder
 WORKDIR /app
 
-# Copy package files and install production deps reproducibly
+# Copy package files and install production deps reproducibly (use npm ci when lockfile exists, fallback to npm install)
 COPY package*.json ./
-RUN npm ci --only=production --no-audit --no-fund
+RUN if [ -f package-lock.json ]; then \
+      echo "package-lock.json found — running npm ci"; \
+      npm ci --only=production --no-audit --no-fund; \
+    else \
+      echo "No package-lock.json — running npm install"; \
+      npm install --only=production --no-audit --no-fund; \
+    fi
 
 # Copy app sources (no build step assumed; if you have one, run it here)
 COPY . .
