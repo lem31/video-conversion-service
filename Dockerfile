@@ -1,5 +1,5 @@
 # Minimal Node image with Python + requests/curl_cffi to support yt-dlp HTTPS proxy usage.
-FROM node:18-bullseye-slim
+FROM node:18-bookworm-slim
 
 # Install minimal system deps and Python/pip
 RUN apt-get update && \
