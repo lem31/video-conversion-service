@@ -271,10 +271,18 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     const msg = error.message || String(error);
 
     // User-friendly error messages
-    if (msg.includes('Sign in to confirm') || (msg.includes('Sign in') && msg.includes('bot')) || msg.includes('authenticated cookies')) {
+    if (msg.includes('Sign in to confirm') || (msg.includes('Sign in') && msg.includes('bot'))) {
       throw new Error(
-        'VIDEO_UNAVAILABLE: This video is temporarily unavailable due to YouTube rate limiting. ' +
-        'This usually happens during high traffic periods. Please try again in a few minutes.'
+        'VIDEO_RATE_LIMITED: YouTube is rate limiting requests from this server. ' +
+        'Please try a different video or try again in a few minutes. If this persists, contact support.'
+      );
+    }
+
+    // Vimeo login required
+    if (msg.includes('vimeo') && (msg.includes('logged-in') || msg.includes('authentication') || msg.includes('Use --cookies'))) {
+      throw new Error(
+        'VIDEO_REQUIRES_AUTH: This Vimeo video requires authentication. ' +
+        'Vimeo has restricted access to most videos. Please try a different platform.'
       );
     }
 
