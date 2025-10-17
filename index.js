@@ -4,6 +4,9 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
+const os = require('os');
+const path = require('path');
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -402,6 +405,55 @@ const handleUpload = (req, res, next) => {
   });
 };
 
+// Simple cache directory for converted MP3s (fast path for repeat URLs)
+const CACHE_DIR = process.env.VIDEO_CACHE_DIR || path.join(os.tmpdir(), 'video_cache');
+if (!fs.existsSync(CACHE_DIR)) {
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+}
+
+// New: start periodic cache cleaner (configurable via env)
+const { startCacheCleaner } = require('./scripts/cacheCleaner');
+const CACHE_CLEAN_DAYS = Number(process.env.CACHE_CLEAN_DAYS || 7); // default 7 days
+const CACHE_CLEAN_INTERVAL_HOURS = Number(process.env.CACHE_CLEAN_INTERVAL_HOURS || 24); // default every 24h
+try {
+  startCacheCleaner(CACHE_DIR, CACHE_CLEAN_DAYS, CACHE_CLEAN_INTERVAL_HOURS);
+  console.log(`Cache cleaner started: purge files older than ${CACHE_CLEAN_DAYS} days every ${CACHE_CLEAN_INTERVAL_HOURS} hours`);
+} catch (e) {
+  console.warn('Failed to start cache cleaner:', e.message);
+}
+
+// Concurrency limiter for downloads (simple semaphore)
+const MAX_CONCURRENT_DOWNLOADS = Number(process.env.MAX_CONCURRENT_DOWNLOADS || 2);
+let currentDownloads = 0;
+const downloadQueue = [];
+
+function acquireDownloadSlot() {
+  return new Promise((resolve) => {
+    if (currentDownloads < MAX_CONCURRENT_DOWNLOADS) {
+      currentDownloads++;
+      return resolve();
+    }
+    downloadQueue.push(resolve);
+  });
+}
+
+function releaseDownloadSlot() {
+  currentDownloads = Math.max(0, currentDownloads - 1);
+  const next = downloadQueue.shift();
+  if (next) {
+    currentDownloads++;
+    next();
+  }
+}
+
+function computeCacheKey(url, opts = {}) {
+  const hash = crypto.createHash('sha256');
+  // include relevant options in the cache key if you support bitrate/format choices later
+  hash.update(String(url));
+  if (opts.quality) hash.update(String(opts.quality));
+  return hash.digest('hex');
+}
+
 app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
   const premium = isPremiumUser(req);
   console.log(`ULTIMATE conversion request - ${premium ? 'PREMIUM' : 'STANDARD'} user`);
@@ -433,41 +485,93 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
       shouldCleanupInput = true;
 
       if (isSupportedVideoUrl(videoUrl)) {
-        try {
-          inputPath = await downloadVideoWithYtdlpUltimate(videoUrl, '/tmp', premium);
-
-          // If already MP3, skip conversion
-          if (inputPath.endsWith('.mp3')) {
-            console.log('Already MP3! No conversion needed.');
-            const stats = fs.statSync(inputPath);
-            const audioData = fs.readFileSync(inputPath);
-            const base64Audio = audioData.toString('base64');
-
-            fs.unlinkSync(inputPath);
-
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-            console.log(`Total: ${elapsed}s (${premium ? 'PREMIUM' : 'STANDARD'})`);
-
-            return res.json({
-              success: true,
-              audioData: base64Audio,
-              filename: 'audio.mp3',
-              size: `${(stats.size / 1024 / 1024).toFixed(2)} MB`,
-              conversionTime: `${elapsed}s`,
-              tier: premium ? 'premium' : 'standard'
-            });
-          }
-
-        } catch (ytdlpError) {
-          const errorMsg = ytdlpError.message || ytdlpError.toString();
-          const errorCode = errorMsg.split(':')[0];
-
+        const isVimeo = videoUrl.includes('vimeo.com');
+        if (isVimeo) {
           return res.status(400).json({
-            error: errorMsg,
-            errorCode: errorCode,
-            errorDetail: errorMsg.split(':')[1]?.trim() || errorMsg
+            error: 'Vimeo not supported',
+            errorCode: 'URL_UNSUPPORTED'
           });
         }
+
+        // --- NEW: Cache fast-path + concurrency control ---
+        const cleaned = cleanVideoUrl(videoUrl);
+        const cacheKey = computeCacheKey(cleaned);
+        const cachedPath = path.join(CACHE_DIR, `${cacheKey}.mp3`);
+
+        if (fs.existsSync(cachedPath)) {
+          console.log(`Cache hit for ${cleaned} -> ${cachedPath}`);
+          const stats = fs.statSync(cachedPath);
+          const audioData = fs.readFileSync(cachedPath);
+          const base64Audio = audioData.toString('base64');
+
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+          console.log(`Total (cached): ${elapsed}s (${premium ? 'PREMIUM' : 'STANDARD'})`);
+
+          return res.json({
+            success: true,
+            audioData: base64Audio,
+            filename: 'audio.mp3',
+            size: `${(stats.size / 1024 / 1024).toFixed(2)} MB`,
+            conversionTime: `${elapsed}s`,
+            tier: premium ? 'premium' : 'standard',
+            cached: true
+          });
+        }
+
+        // Acquire a download slot before expensive work
+        await acquireDownloadSlot();
+        let downloadedPath = null;
+        try {
+          // perform actual download + conversion (this will produce a file path)
+          downloadedPath = await downloadVideoWithYtdlpUltimate(videoUrl, '/tmp', premium);
+          // If the returned file is not an mp3, convertToMp3Ultimate call already handled it in the function.
+          // Copy to cache for future requests (atomic-ish)
+          if (downloadedPath && fs.existsSync(downloadedPath)) {
+            try {
+              // ensure we don't overwrite an existing cache (race safe)
+              if (!fs.existsSync(cachedPath)) {
+                fs.copyFileSync(downloadedPath, cachedPath);
+                console.log(`Cached ${cleaned} -> ${cachedPath}`);
+              } else {
+                console.log(`Cache already created concurrently for ${cleaned}`);
+              }
+            } catch (e) {
+              console.warn('Failed to cache file:', e.message);
+            }
+          }
+        } finally {
+          // always release slot
+          releaseDownloadSlot();
+        }
+
+        // If we have cachedPath now, serve from cache (prefer cache)
+        const finalServePath = fs.existsSync(cachedPath) ? cachedPath : downloadedPath;
+        if (finalServePath && finalServePath.endsWith('.mp3')) {
+          console.log('Serving final MP3:', finalServePath);
+          const stats = fs.statSync(finalServePath);
+          const audioData = fs.readFileSync(finalServePath);
+          const base64Audio = audioData.toString('base64');
+
+          if (fs.existsSync(downloadedPath) && shouldCleanupInput) {
+            // cleanup temp downloaded file if it's different from cache
+            try {
+              if (downloadedPath !== cachedPath) fs.unlinkSync(downloadedPath);
+            } catch (e) { /* ignore */ }
+          }
+
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+          return res.json({
+            success: true,
+            audioData: base64Audio,
+            filename: 'audio.mp3',
+            size: `${(stats.size / 1024 / 1024).toFixed(2)} MB`,
+            conversionTime: `${elapsed}s`,
+            tier: premium ? 'premium' : 'standard',
+            cached: fs.existsSync(cachedPath)
+          });
+        }
+
+        // If not MP3 or download failed, fall through to error handling below
       } else {
         const videoId = uuidv4();
         inputPath = `/tmp/direct_${videoId}.video`;
