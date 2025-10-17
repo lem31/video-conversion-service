@@ -174,12 +174,16 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
 
     if (process.env.YTDLP_PROXY) extraArgs.push('--proxy', process.env.YTDLP_PROXY);
 
+    // Keep track of last yt-dlp error to decide on special HLS retry
+    let lastYtdlpError = null;
+
     // Try first attempt
     try {
       await runYtDlp([...baseArgs, ...extraArgs], '/tmp');
       console.log('SUCCESS: Primary method worked!');
     } catch (firstErr) {
       console.warn('Layer 1 failed:', firstErr.message);
+      lastYtdlpError = firstErr;
 
       // LAYER 2: TV embedded client (no PO Token, works with proxy)
       console.log('Trying Layer 2: TV embedded client fallback...');
@@ -199,8 +203,10 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
 
         await runYtDlp(tvFallback, '/tmp');
         console.log('SUCCESS: TV embedded client fallback worked!');
+        lastYtdlpError = null;
       } catch (tvErr) {
         console.warn('Layer 2 failed:', tvErr.message);
+        lastYtdlpError = tvErr;
 
         // LAYER 3: Web Safari client (alternative web client)
         console.log('Trying Layer 3: Web Safari client fallback...');
@@ -220,8 +226,10 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
 
           await runYtDlp(safariFallback, '/tmp');
           console.log('SUCCESS: Web Safari client fallback worked!');
+          lastYtdlpError = null;
         } catch (safariErr) {
           console.warn('Layer 3 failed:', safariErr.message);
+          lastYtdlpError = safariErr;
 
           // LAYER 4: Web embedded player (last resort, no PO Token)
           console.log('Trying Layer 4: Web embedded player fallback...');
@@ -243,6 +251,44 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
 
           await runYtDlp(embeddedFallback, '/tmp');
           console.log('SUCCESS: Web embedded fallback worked!');
+          lastYtdlpError = null;
+        }
+      }
+    }
+
+    // SPECIAL RETRY: HLS/FFmpeg URL parsing errors sometimes need mpegts or prefer-ffmpeg.
+    // If the last yt-dlp run failed and stderr mentions ffmpeg URL parsing issues, retry with HLS-friendly flags.
+    if (lastYtdlpError && typeof lastYtdlpError.stderr === 'string') {
+      const stderr = lastYtdlpError.stderr;
+      const needsHlsRetry =
+        stderr.includes('Port missing in uri') ||
+        stderr.includes('Invalid argument') ||
+        stderr.includes('ERROR: ffmpeg exited with code 1') ||
+        stderr.includes('ffmpeg exited with code 1');
+
+      if (needsHlsRetry) {
+        console.log('Detected ffmpeg/HLS parsing issue, retrying with HLS-friendly flags (mpegts / prefer-ffmpeg)...');
+        try {
+          const hlsArgs = [
+            '--no-playlist',
+            '-x', '--audio-format', 'mp3',
+            '--format', 'bestaudio/best',
+            '--output', outputTemplate,
+            '--hls-use-mpegts',
+            '--hls-prefer-ffmpeg',
+            '--allow-unplayable-formats',
+            '--geo-bypass',
+            cleanedUrl
+          ];
+          if (process.env.YTDLP_COOKIES) hlsArgs.push('--cookies', process.env.YTDLP_COOKIES);
+          if (process.env.YTDLP_PROXY) hlsArgs.push('--proxy', process.env.YTDLP_PROXY);
+
+          await runYtDlp(hlsArgs, '/tmp');
+          console.log('SUCCESS: HLS-friendly retry worked!');
+          lastYtdlpError = null;
+        } catch (hlsErr) {
+          console.warn('HLS-friendly retry failed:', hlsErr.message);
+          lastYtdlpError = hlsErr;
         }
       }
     }
@@ -258,6 +304,10 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     console.log('Found files:', files);
 
     if (!files || files.length === 0) {
+      // If we have a stored yt-dlp error, throw it so existing error mapping runs
+      if (lastYtdlpError) {
+        throw lastYtdlpError;
+      }
       throw new Error('DOWNLOAD_FAILED: yt-dlp did not produce an output file. The video may be unavailable, region-locked, require login, or yt-dlp failed.');
     }
 
@@ -323,7 +373,6 @@ async function downloadVideoWithYtdlpUltimate(videoUrl, outputDir, isPremium) {
     }
   }
 }
-
 async function downloadDirectVideo(videoUrl, outputPath) {
   try {
     const response = await axios({
