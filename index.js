@@ -171,7 +171,7 @@ async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, 
     const ytdlp = spawn('yt-dlp', ytdlpArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
     const bitrate = isPremium ? '192k' : '96k';
-    const quality = isPremium ? '2' : '6';
+const quality = '2';
 
    const ffmpegArgs = [
       '-hide_banner',
