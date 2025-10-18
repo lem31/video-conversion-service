@@ -146,14 +146,21 @@ function runYtDlp(args, cwd = '/tmp') {
 // Stream yt-dlp -> ffmpeg to produce MP3 without writing source file
 async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, ytExtraArgs = [], playerClient = 'web') {
   return new Promise((resolve, reject) => {
-    const ytdlpArgs = [
-      '--no-playlist',
-      '--no-warnings',
-      '-f', ytFormat,
-      '-o', '-',
-      cleanedUrl,
-      ...ytExtraArgs
-    ];
+const ytdlpArgs = [
+  '--no-playlist',
+  '--no-warnings',
+  '-f', ytFormat,
+  '-o', '-',
+  '--extractor-args', `youtube:player_client=${playerClient}`,
+  '--user-agent',
+    playerClient === 'web_safari'
+      ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15'
+      : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+  '--referer', 'https://www.youtube.com/',
+  cleanedUrl,
+  ...ytExtraArgs
+];
+
 
     const ytdlp = spawn('yt-dlp', ytdlpArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
