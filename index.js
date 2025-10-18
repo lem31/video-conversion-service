@@ -214,7 +214,7 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
   const cleanedUrl = cleanVideoUrl(videoUrl);
 
   // Fast-fail timeout per layer
-  const LAYER_TIMEOUT = isPremium ? 90000 : 60000; // 90s premium, 60s free
+  const LAYER_TIMEOUT = isPremium ? 60000 : 45000;
 
   try {
     console.log('OPTIMIZED download:', cleanedUrl);
