@@ -11,30 +11,6 @@ const path = require('path');
 const app = express();
 const port = process.env.PORT || 8080;
 
-// Realistic User-Agent pool (rotates to avoid detection)
-const USER_AGENTS = [
-  // Chrome on Windows
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-  // Chrome on Mac
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-  // Safari on Mac
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15',
-  // Edge on Windows
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
-  // Firefox on Windows
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
-  // Mobile Chrome (Android)
-  'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36',
-  // Mobile Safari (iOS)
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1'
-];
-
-function getRandomUserAgent() {
-  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-}
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -170,24 +146,11 @@ function runYtDlp(args, cwd = '/tmp') {
 // Stream yt-dlp -> ffmpeg to produce MP3 without writing source file
 async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, ytExtraArgs = [], playerClient = 'web') {
   return new Promise((resolve, reject) => {
-    // FIX: Add Safari client args for piped mode (same as Layer 2)
-    const userAgent = playerClient === 'web_safari'
-      ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15'
-      : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
-
     const ytdlpArgs = [
       '--no-playlist',
       '--no-warnings',
       '-f', ytFormat,
       '-o', '-',
-      '--extractor-args', `youtube:player_client=${playerClient}`,
-      '--user-agent', userAgent,
-      '--referer', 'https://www.youtube.com/',
-      '--add-header', 'Accept-Language:en-US,en;q=0.9',
-      '--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      '--add-header', 'Sec-Fetch-Site:none',
-      '--add-header', 'Sec-Fetch-Mode:navigate',
-      '--add-header', 'Sec-Fetch-Dest:document',
       cleanedUrl,
       ...ytExtraArgs
     ];
@@ -195,16 +158,14 @@ async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, 
     const ytdlp = spawn('yt-dlp', ytdlpArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
     const bitrate = isPremium ? '192k' : '96k';
-    const quality = '2'; // Use fast encoding for all tiers (bitrate controls size, not quality)
+    const quality = isPremium ? '2' : '6';
 
     const ffmpegArgs = [
       '-hide_banner',
       '-loglevel', 'error',
-      '-err_detect', 'ignore_err',
-      '-fflags', '+discardcorrupt+genpts',
       '-i', 'pipe:0',
       '-vn', '-sn', '-dn',
-      '-map', '0:a:0?',
+      '-map', '0:a:0',
       '-c:a', 'libmp3lame',
       '-b:a', bitrate,
       '-ar', '44100',
@@ -219,67 +180,29 @@ async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, 
     ];
     const ff = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
 
-    let ytdlpErr = '';
-    ytdlp.stderr.on('data', (b) => { ytdlpErr += b.toString(); });
+    ytdlp.stdout.pipe(ff.stdin);
 
     let ffErr = '';
     ff.stderr.on('data', (b) => { ffErr += b.toString(); });
 
-    let pipeError = null;
-
-    ytdlp.stdout.on('error', (e) => {
-      console.warn('yt-dlp stdout pipe error:', e.message);
-      pipeError = e;
-    });
-
-    ff.stdin.on('error', (e) => {
-      console.warn('ffmpeg stdin pipe error:', e.message);
-      pipeError = e;
-    });
-
-    ytdlp.stdout.pipe(ff.stdin).on('error', (e) => {
-      console.warn('Pipe connection error:', e.message);
-      pipeError = e;
-    });
-
-    ytdlp.on('close', (code) => {
-      if (code !== 0) {
-        console.warn(`yt-dlp exited with code ${code} in piped mode`);
-        try { ff.kill(); } catch (e) {}
-        const msg = ytdlpErr || `yt-dlp exited ${code}`;
-        reject(new Error(`PIPED_FAILED: ytdlp: ${msg}`));
-      }
-    });
+    let ytdlpErr = '';
+    ytdlp.stderr.on('data', (b) => { ytdlpErr += b.toString(); });
 
     ff.on('close', (code) => {
       try { ytdlp.kill(); } catch (e) {}
-
-      if (code === 0) {
-        // Verify output file exists and has content
-        if (fs.existsSync(outputPath)) {
-          const stats = fs.statSync(outputPath);
-          if (stats.size > 1000) { // At least 1KB
-            return resolve();
-          } else {
-            return reject(new Error(`PIPED_FAILED: Output file too small (${stats.size} bytes)`));
-          }
-        } else {
-          return reject(new Error('PIPED_FAILED: Output file not created'));
-        }
-      }
-
-      const msg = ffErr || ytdlpErr || pipeError?.message || `ffmpeg exited ${code}`;
+      if (code === 0) return resolve();
+      const msg = ffErr || ytdlpErr || `ffmpeg exited ${code}`;
       reject(new Error(`PIPED_FAILED: ${msg}`));
     });
 
     ff.on('error', (e) => {
       try { ytdlp.kill(); } catch (er) {}
-      reject(new Error(`PIPED_FAILED: ffmpeg error: ${e.message}`));
+      reject(e);
     });
 
     ytdlp.on('error', (e) => {
       try { ff.kill(); } catch (er) {}
-      reject(new Error(`PIPED_FAILED: ytdlp error: ${e.message}`));
+      reject(e);
     });
   });
 }
@@ -291,7 +214,7 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
   const cleanedUrl = cleanVideoUrl(videoUrl);
 
   // Fast-fail timeout per layer
-  const LAYER_TIMEOUT = isPremium ? 120000 : 90000; // 120s premium, 90s free (increased for reliability)
+  const LAYER_TIMEOUT = isPremium ? 90000 : 60000; // 90s premium, 60s free
 
   try {
     console.log('OPTIMIZED download:', cleanedUrl);
@@ -357,10 +280,6 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
     }
     console.log(`Using player_client: ${playerClient}`);
 
-    // ANTI-BOT: Randomize User-Agent on each request to avoid detection
-    const randomUA = getRandomUserAgent();
-    console.log(`Using randomized User-Agent: ${randomUA.substring(0, 50)}...`);
-
     const baseArgs = [
       '--no-playlist',
       '-x', '--audio-format', 'mp3',
@@ -368,7 +287,7 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
       '--output', outputTemplate,
       '--no-mtime',
       '--extractor-args', `youtube:player_client=${playerClient}`,
-      '--user-agent', randomUA,
+      '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
       '--referer', 'https://www.youtube.com/',
       '--add-header', 'Accept-Language:en-US,en;q=0.9',
       '--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -391,8 +310,8 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
 
     let lastYtdlpError = null;
 
-    // OPTIMIZATION: Try piped fast path first if enabled (disabled by default due to incomplete downloads)
-    const enablePipe = process.env.ENABLE_PIPE === '1'; // Must explicitly enable with ENABLE_PIPE=1
+    // OPTIMIZATION: Try piped fast path first if enabled
+    const enablePipe = process.env.ENABLE_PIPE !== '0';
     if (enablePipe) {
       const pipedMp3Path = `${outputDir}/ytdlp_${videoId}.mp3`;
       const ytExtraArgsForPipe = [];
@@ -415,44 +334,30 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
       }
     }
 
-    // OPTIMIZATION: Skip Layer 1 for Shorts - start with Safari (works most often)
-    const skipLayer1 = isShortUrl || preferM4aForShort;
+    // LAYER 1: Primary method with timeout
+    try {
+      console.log('Layer 1: Primary method...');
+      const layer1Timeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('LAYER_TIMEOUT')), LAYER_TIMEOUT)
+      );
+      const layer1Promise = runYtDlp([...baseArgs, ...extraArgs], '/tmp');
 
-    if (!skipLayer1) {
-      // LAYER 1: Primary method with timeout (only for longer videos)
-      try {
-        console.log('Layer 1: Primary method...');
-        const layer1Timeout = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('LAYER_TIMEOUT')), LAYER_TIMEOUT)
-        );
-        const layer1Promise = runYtDlp([...baseArgs, ...extraArgs], '/tmp');
+      await Promise.race([layer1Promise, layer1Timeout]);
+      console.log('SUCCESS: Layer 1 worked!');
+    } catch (firstErr) {
+      console.warn('Layer 1 failed:', firstErr.message);
+      lastYtdlpError = firstErr;
 
-        await Promise.race([layer1Promise, layer1Timeout]);
-        console.log('SUCCESS: Layer 1 worked!');
-        // Success - skip to file finding
-      } catch (firstErr) {
-        console.warn('Layer 1 failed:', firstErr.message);
-        lastYtdlpError = firstErr;
-      }
-    } else {
-      console.log('Skipping Layer 1 - optimized for Shorts, starting with Safari');
-      lastYtdlpError = new Error('SKIPPED_LAYER_1');
-    }
-
-    // LAYER 2: Safari fallback (USER REQUESTED - works most often)
-    if (lastYtdlpError) {
+      // LAYER 2: Safari fallback (USER REQUESTED - works most often)
       console.log('Layer 2: Safari fallback (primary working layer)...');
       try {
-        // ANTI-BOT: New randomized User-Agent for Layer 2
-        const randomUA2 = getRandomUserAgent();
-
         const safariFallback = [
           '--no-playlist',
           '-x', '--audio-format', 'mp3',
           '--format', 'bestaudio/best',
           '--output', outputTemplate,
           '--extractor-args', 'youtube:player_client=web_safari',
-          '--user-agent', randomUA2,
+          '--user-agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
           '--referer', 'https://www.youtube.com/',
           '--add-header', 'Accept-Language:en-US,en;q=0.9',
           cleanedUrl
@@ -476,16 +381,13 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
         // LAYER 3: TV embedded fallback (final fallback)
         console.log('Layer 3: TV embedded fallback...');
         try {
-          // ANTI-BOT: New randomized User-Agent for Layer 3
-          const randomUA3 = getRandomUserAgent();
-
           const tvFallback = [
             '--no-playlist',
             '-x', '--audio-format', 'mp3',
             '--format', 'bestaudio/best',
             '--output', outputTemplate,
             '--extractor-args', 'youtube:player_client=tv_embedded',
-            '--user-agent', randomUA3,
+            '--user-agent', 'Mozilla/5.0 (PlayStation; PlayStation 5/2.26) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0 Safari/605.1.15',
             cleanedUrl
           ];
 
@@ -612,7 +514,7 @@ function convertToMp3Optimized(inputPath, outputPath, isPremium) {
     console.log(`${label} conversion...`);
 
     const bitrate = isPremium ? '192k' : '96k';
-    const quality = '2'; // Use fast encoding for all tiers (bitrate controls size, not quality)
+    const quality = isPremium ? '2' : '6';
 
     const ffmpeg = spawn('ffmpeg', [
       '-threads', '0',
@@ -828,19 +730,21 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
         if (fs.existsSync(cachedPath)) {
           console.log(`✓ Cache hit for ${cleaned}`);
           const stats = fs.statSync(cachedPath);
+          const audioData = fs.readFileSync(cachedPath);
+          const base64Audio = audioData.toString('base64');
+
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
           console.log(`Total (cached): ${elapsed}s`);
 
-          // Stream binary response (faster for all devices)
-          res.setHeader('Content-Type', 'audio/mpeg');
-          res.setHeader('Content-Disposition', 'attachment; filename="audio.mp3"');
-          res.setHeader('Content-Length', stats.size);
-          res.setHeader('X-Conversion-Time', `${elapsed}s`);
-          res.setHeader('X-File-Size', `${(stats.size / 1024 / 1024).toFixed(2)} MB`);
-          res.setHeader('X-User-Tier', premium ? 'premium' : 'standard');
-          res.setHeader('X-Cached', 'true');
-
-          return fs.createReadStream(cachedPath).pipe(res);
+          return res.json({
+            success: true,
+            audioData: base64Audio,
+            filename: 'audio.mp3',
+            size: `${(stats.size / 1024 / 1024).toFixed(2)} MB`,
+            conversionTime: `${elapsed}s`,
+            tier: premium ? 'premium' : 'standard',
+            cached: true
+          });
         }
 
         // Acquire slot with priority awareness
@@ -870,28 +774,24 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
         if (finalServePath && finalServePath.endsWith('.mp3')) {
           console.log('Serving MP3:', finalServePath);
           const stats = fs.statSync(finalServePath);
+          const audioData = fs.readFileSync(finalServePath);
+          const base64Audio = audioData.toString('base64');
+
+          // Cleanup temp file if different from cache
+          if (fs.existsSync(downloadedPath) && downloadedPath !== cachedPath) {
+            try { fs.unlinkSync(downloadedPath); } catch (e) { /* ignore */ }
+          }
+
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-
-          // Stream binary response (faster for all devices)
-          res.setHeader('Content-Type', 'audio/mpeg');
-          res.setHeader('Content-Disposition', 'attachment; filename="audio.mp3"');
-          res.setHeader('Content-Length', stats.size);
-          res.setHeader('X-Conversion-Time', `${elapsed}s`);
-          res.setHeader('X-File-Size', `${(stats.size / 1024 / 1024).toFixed(2)} MB`);
-          res.setHeader('X-User-Tier', premium ? 'premium' : 'standard');
-          res.setHeader('X-Cached', fs.existsSync(cachedPath) ? 'true' : 'false');
-
-          const stream = fs.createReadStream(finalServePath);
-          stream.pipe(res);
-
-          // Cleanup temp file after streaming completes
-          stream.on('end', () => {
-            if (fs.existsSync(downloadedPath) && downloadedPath !== cachedPath) {
-              try { fs.unlinkSync(downloadedPath); } catch (e) { /* ignore */ }
-            }
+          return res.json({
+            success: true,
+            audioData: base64Audio,
+            filename: 'audio.mp3',
+            size: `${(stats.size / 1024 / 1024).toFixed(2)} MB`,
+            conversionTime: `${elapsed}s`,
+            tier: premium ? 'premium' : 'standard',
+            cached: fs.existsSync(cachedPath)
           });
-
-          return;
         }
       } else {
         const videoId = uuidv4();
@@ -911,31 +811,25 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
     await convertToMp3Optimized(inputPath, outputPath, premium);
 
     const stats = fs.statSync(outputPath);
+    const audioData = fs.readFileSync(outputPath);
+    const base64Audio = audioData.toString('base64');
+
+    // Cleanup
+    fs.unlinkSync(outputPath);
+    if (shouldCleanupInput && fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+    if (videoFile && fs.existsSync(videoFile.path)) fs.unlinkSync(videoFile.path);
+
     const filename = videoFile ? `${videoFile.originalname.split('.')[0]}.mp3` : `audio_${outputId}.mp3`;
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`Total: ${elapsed}s`);
 
-    // Stream binary response (faster for all devices)
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Length', stats.size);
-    res.setHeader('X-Conversion-Time', `${elapsed}s`);
-    res.setHeader('X-File-Size', `${(stats.size / 1024 / 1024).toFixed(2)} MB`);
-    res.setHeader('X-User-Tier', premium ? 'premium' : 'standard');
-    res.setHeader('X-Cached', 'false');
-
-    const stream = fs.createReadStream(outputPath);
-    stream.pipe(res);
-
-    // Cleanup after streaming completes
-    stream.on('end', () => {
-      try { fs.unlinkSync(outputPath); } catch (e) { /* ignore */ }
-      if (shouldCleanupInput && fs.existsSync(inputPath)) {
-        try { fs.unlinkSync(inputPath); } catch (e) { /* ignore */ }
-      }
-      if (videoFile && fs.existsSync(videoFile.path)) {
-        try { fs.unlinkSync(videoFile.path); } catch (e) { /* ignore */ }
-      }
+    res.json({
+      success: true,
+      audioData: base64Audio,
+      filename: filename,
+      size: `${(stats.size / 1024 / 1024).toFixed(2)} MB`,
+      conversionTime: `${elapsed}s`,
+      tier: premium ? 'premium' : 'standard'
     });
 
   } catch (error) {
@@ -1003,7 +897,7 @@ app.listen(port, () => {
   console.log('  - Cookies:', process.env.YTDLP_COOKIES ? 'ENABLED' : 'DISABLED');
   console.log('  - Proxy:', process.env.YTDLP_PROXY ? 'ENABLED' : 'DISABLED');
   console.log('  - Skip metadata probe:', process.env.SKIP_METADATA_PROBE || 'auto (shorts only)');
-  console.log('  - Pipe mode:', process.env.ENABLE_PIPE === '1' ? 'ENABLED' : 'DISABLED (recommended)');
+  console.log('  - Pipe mode:', process.env.ENABLE_PIPE !== '0' ? 'ENABLED' : 'DISABLED');
   console.log('  - Concurrent downloads (premium):', MAX_CONCURRENT_PREMIUM);
   console.log('  - Concurrent downloads (standard):', MAX_CONCURRENT_STANDARD);
   console.log('\n🚀 Ready! Optimized for speed.\n');
