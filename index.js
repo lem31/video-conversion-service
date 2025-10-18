@@ -529,7 +529,7 @@ function convertToMp3Optimized(inputPath, outputPath, isPremium) {
     console.log(`${label} conversion...`);
 
     const bitrate = isPremium ? '192k' : '96k';
-    const quality = isPremium ? '2' : '6';
+    const quality = '2'; 
 
     const ffmpeg = spawn('ffmpeg', [
       '-threads', '0',
