@@ -11,6 +11,30 @@ const path = require('path');
 const app = express();
 const port = process.env.PORT || 8080;
 
+// Realistic User-Agent pool (rotates to avoid detection)
+const USER_AGENTS = [
+  // Chrome on Windows
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+  // Chrome on Mac
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  // Safari on Mac
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15',
+  // Edge on Windows
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
+  // Firefox on Windows
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
+  // Mobile Chrome (Android)
+  'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36',
+  // Mobile Safari (iOS)
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1'
+];
+
+function getRandomUserAgent() {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -333,6 +357,10 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
     }
     console.log(`Using player_client: ${playerClient}`);
 
+    // ANTI-BOT: Randomize User-Agent on each request to avoid detection
+    const randomUA = getRandomUserAgent();
+    console.log(`Using randomized User-Agent: ${randomUA.substring(0, 50)}...`);
+
     const baseArgs = [
       '--no-playlist',
       '-x', '--audio-format', 'mp3',
@@ -340,7 +368,7 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
       '--output', outputTemplate,
       '--no-mtime',
       '--extractor-args', `youtube:player_client=${playerClient}`,
-      '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      '--user-agent', randomUA,
       '--referer', 'https://www.youtube.com/',
       '--add-header', 'Accept-Language:en-US,en;q=0.9',
       '--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -415,13 +443,16 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
     if (lastYtdlpError) {
       console.log('Layer 2: Safari fallback (primary working layer)...');
       try {
+        // ANTI-BOT: New randomized User-Agent for Layer 2
+        const randomUA2 = getRandomUserAgent();
+
         const safariFallback = [
           '--no-playlist',
           '-x', '--audio-format', 'mp3',
           '--format', 'bestaudio/best',
           '--output', outputTemplate,
           '--extractor-args', 'youtube:player_client=web_safari',
-          '--user-agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+          '--user-agent', randomUA2,
           '--referer', 'https://www.youtube.com/',
           '--add-header', 'Accept-Language:en-US,en;q=0.9',
           cleanedUrl
@@ -445,13 +476,16 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
         // LAYER 3: TV embedded fallback (final fallback)
         console.log('Layer 3: TV embedded fallback...');
         try {
+          // ANTI-BOT: New randomized User-Agent for Layer 3
+          const randomUA3 = getRandomUserAgent();
+
           const tvFallback = [
             '--no-playlist',
             '-x', '--audio-format', 'mp3',
             '--format', 'bestaudio/best',
             '--output', outputTemplate,
             '--extractor-args', 'youtube:player_client=tv_embedded',
-            '--user-agent', 'Mozilla/5.0 (PlayStation; PlayStation 5/2.26) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0 Safari/605.1.15',
+            '--user-agent', randomUA3,
             cleanedUrl
           ];
 
