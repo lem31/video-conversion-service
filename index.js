@@ -173,12 +173,14 @@ async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, 
     const bitrate = isPremium ? '192k' : '96k';
     const quality = isPremium ? '2' : '6';
 
-    const ffmpegArgs = [
+   const ffmpegArgs = [
       '-hide_banner',
       '-loglevel', 'error',
+      '-err_detect', 'ignore_err',
+      '-fflags', '+discardcorrupt+genpts',
       '-i', 'pipe:0',
       '-vn', '-sn', '-dn',
-      '-map', '0:a:0',
+      '-map', '0:a:0?',
       '-c:a', 'libmp3lame',
       '-b:a', bitrate,
       '-ar', '44100',
