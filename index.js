@@ -158,7 +158,7 @@ async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, 
     const ytdlp = spawn('yt-dlp', ytdlpArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
     const bitrate = isPremium ? '192k' : '96k';
-    const quality = '2'; // OPTIMIZED: Fast encoding for all users
+    const quality = isPremium ? '2' : '6';
 
     const ffmpegArgs = [
       '-hide_banner',
@@ -507,14 +507,14 @@ async function downloadDirectVideo(videoUrl, outputPath) {
   }
 }
 
-// OPTIMIZED: Faster FFmpeg conversion - fast encoding for all users
+// OPTIMIZED: Faster FFmpeg conversion
 function convertToMp3Optimized(inputPath, outputPath, isPremium) {
   return new Promise((resolve, reject) => {
     const label = isPremium ? 'PREMIUM' : 'STANDARD';
     console.log(`${label} conversion...`);
 
     const bitrate = isPremium ? '192k' : '96k';
-    const quality = '2'; // OPTIMIZED: Fast encoding for all users (not 6 for standard)
+    const quality = isPremium ? '2' : '6';
 
     const ffmpeg = spawn('ffmpeg', [
       '-threads', '0',
@@ -730,19 +730,21 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
         if (fs.existsSync(cachedPath)) {
           console.log(`✓ Cache hit for ${cleaned}`);
           const stats = fs.statSync(cachedPath);
+          const audioData = fs.readFileSync(cachedPath);
+          const base64Audio = audioData.toString('base64');
+
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
           console.log(`Total (cached): ${elapsed}s`);
 
-          // OPTIMIZED: Binary streaming instead of base64 JSON
-          res.setHeader('Content-Type', 'audio/mpeg');
-          res.setHeader('Content-Disposition', 'attachment; filename="audio.mp3"');
-          res.setHeader('Content-Length', stats.size);
-          res.setHeader('X-Conversion-Time', `${elapsed}s`);
-          res.setHeader('X-File-Size', `${(stats.size / 1024 / 1024).toFixed(2)} MB`);
-          res.setHeader('X-User-Tier', premium ? 'premium' : 'standard');
-          res.setHeader('X-Cached', 'true');
-
-          return fs.createReadStream(cachedPath).pipe(res);
+          return res.json({
+            success: true,
+            audioData: base64Audio,
+            filename: 'audio.mp3',
+            size: `${(stats.size / 1024 / 1024).toFixed(2)} MB`,
+            conversionTime: `${elapsed}s`,
+            tier: premium ? 'premium' : 'standard',
+            cached: true
+          });
         }
 
         // Acquire slot with priority awareness
@@ -772,28 +774,24 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
         if (finalServePath && finalServePath.endsWith('.mp3')) {
           console.log('Serving MP3:', finalServePath);
           const stats = fs.statSync(finalServePath);
+          const audioData = fs.readFileSync(finalServePath);
+          const base64Audio = audioData.toString('base64');
+
+          // Cleanup temp file if different from cache
+          if (fs.existsSync(downloadedPath) && downloadedPath !== cachedPath) {
+            try { fs.unlinkSync(downloadedPath); } catch (e) { /* ignore */ }
+          }
+
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-
-          // OPTIMIZED: Binary streaming instead of base64 JSON
-          res.setHeader('Content-Type', 'audio/mpeg');
-          res.setHeader('Content-Disposition', 'attachment; filename="audio.mp3"');
-          res.setHeader('Content-Length', stats.size);
-          res.setHeader('X-Conversion-Time', `${elapsed}s`);
-          res.setHeader('X-File-Size', `${(stats.size / 1024 / 1024).toFixed(2)} MB`);
-          res.setHeader('X-User-Tier', premium ? 'premium' : 'standard');
-          res.setHeader('X-Cached', fs.existsSync(cachedPath) ? 'true' : 'false');
-
-          const stream = fs.createReadStream(finalServePath);
-          stream.pipe(res);
-
-          // Cleanup temp file after streaming completes
-          stream.on('end', () => {
-            if (fs.existsSync(downloadedPath) && downloadedPath !== cachedPath) {
-              try { fs.unlinkSync(downloadedPath); } catch (e) { /* ignore */ }
-            }
+          return res.json({
+            success: true,
+            audioData: base64Audio,
+            filename: 'audio.mp3',
+            size: `${(stats.size / 1024 / 1024).toFixed(2)} MB`,
+            conversionTime: `${elapsed}s`,
+            tier: premium ? 'premium' : 'standard',
+            cached: fs.existsSync(cachedPath)
           });
-
-          return;
         }
       } else {
         const videoId = uuidv4();
@@ -813,31 +811,25 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
     await convertToMp3Optimized(inputPath, outputPath, premium);
 
     const stats = fs.statSync(outputPath);
+    const audioData = fs.readFileSync(outputPath);
+    const base64Audio = audioData.toString('base64');
+
+    // Cleanup
+    fs.unlinkSync(outputPath);
+    if (shouldCleanupInput && fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+    if (videoFile && fs.existsSync(videoFile.path)) fs.unlinkSync(videoFile.path);
+
     const filename = videoFile ? `${videoFile.originalname.split('.')[0]}.mp3` : `audio_${outputId}.mp3`;
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`Total: ${elapsed}s`);
 
-    // OPTIMIZED: Binary streaming instead of base64 JSON
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Length', stats.size);
-    res.setHeader('X-Conversion-Time', `${elapsed}s`);
-    res.setHeader('X-File-Size', `${(stats.size / 1024 / 1024).toFixed(2)} MB`);
-    res.setHeader('X-User-Tier', premium ? 'premium' : 'standard');
-    res.setHeader('X-Cached', 'false');
-
-    const stream = fs.createReadStream(outputPath);
-    stream.pipe(res);
-
-    // Cleanup after streaming completes
-    stream.on('end', () => {
-      try { fs.unlinkSync(outputPath); } catch (e) { /* ignore */ }
-      if (shouldCleanupInput && fs.existsSync(inputPath)) {
-        try { fs.unlinkSync(inputPath); } catch (e) { /* ignore */ }
-      }
-      if (videoFile && fs.existsSync(videoFile.path)) {
-        try { fs.unlinkSync(videoFile.path); } catch (e) { /* ignore */ }
-      }
+    res.json({
+      success: true,
+      audioData: base64Audio,
+      filename: filename,
+      size: `${(stats.size / 1024 / 1024).toFixed(2)} MB`,
+      conversionTime: `${elapsed}s`,
+      tier: premium ? 'premium' : 'standard'
     });
 
   } catch (error) {
@@ -873,12 +865,11 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
-    mode: 'OPTIMIZED (3-Layer Fast-Fail + Binary Streaming)',
+    mode: 'OPTIMIZED (3-Layer Fast-Fail)',
     layers: '3 (Primary → Safari → TV Embedded)',
     timeouts: 'Layer timeout: 60-90s',
     cacheFirst: true,
     priorityQueue: true,
-    binaryStreaming: true,
     cookiesEnabled: !!process.env.YTDLP_COOKIES,
     proxyEnabled: !!process.env.YTDLP_PROXY,
     binaries: BINARIES,
@@ -899,8 +890,7 @@ app.listen(port, () => {
 ║  ✓ Priority queue for premium users                       ║
 ║  ✓ Fast-fail timeouts (60-90s per layer)                  ║
 ║  ✓ 3 optimized layers (Primary → Safari → TV)             ║
-║  ✓ Binary streaming (33% faster than base64)              ║
-║  ✓ Fast encoding for all users                            ║
+║  Expected: 40-60% faster than before                      ║
 ╚═══════════════════════════════════════════════════════════╝
   `);
   console.log('Configuration:');
@@ -910,5 +900,5 @@ app.listen(port, () => {
   console.log('  - Pipe mode:', process.env.ENABLE_PIPE !== '0' ? 'ENABLED' : 'DISABLED');
   console.log('  - Concurrent downloads (premium):', MAX_CONCURRENT_PREMIUM);
   console.log('  - Concurrent downloads (standard):', MAX_CONCURRENT_STANDARD);
-  console.log('\n🚀 Ready! Optimized for speed with binary streaming.\n');
+  console.log('\n🚀 Ready! Optimized for speed.\n');
 });
