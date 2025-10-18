@@ -363,29 +363,8 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
 
     let lastYtdlpError = null;
 
-    // OPTIMIZATION: Try piped fast path first if enabled (disabled by default due to incomplete downloads)
-    const enablePipe = process.env.ENABLE_PIPE === '1'; // Must explicitly enable with ENABLE_PIPE=1
-    if (enablePipe) {
-      const pipedMp3Path = `${outputDir}/ytdlp_${videoId}.mp3`;
-      const ytExtraArgsForPipe = [];
-      if (process.env.YTDLP_COOKIES) ytExtraArgsForPipe.push('--cookies', process.env.YTDLP_COOKIES);
-      else if (process.env.YTDLP_BROWSER) ytExtraArgsForPipe.push('--cookies-from-browser', process.env.YTDLP_BROWSER);
-      if (process.env.YTDLP_PROXY) ytExtraArgsForPipe.push('--proxy', process.env.YTDLP_PROXY);
-
-      try {
-        console.log('Attempting piped yt-dlp -> ffmpeg (fast path)...');
-        const pipeTimeout = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('PIPE_TIMEOUT')), LAYER_TIMEOUT)
-        );
-        const pipePromise = streamYtdlpToFfmpeg(cleanedUrl, formatString, pipedMp3Path, isPremium, ytExtraArgsForPipe, playerClient);
-
-        await Promise.race([pipePromise, pipeTimeout]);
-        console.log('SUCCESS: Piped fast path produced MP3:', pipedMp3Path);
-        return pipedMp3Path;
-      } catch (pipeErr) {
-        console.warn('Piped fast path failed:', pipeErr.message);
-      }
-    }
+    // DISABLED: Piped mode removed - unreliable and causes delays
+    // Direct download is faster and more reliable
 
     // OPTIMIZATION: Skip Layer 1 for Shorts - start with Safari (works most often)
     const skipLayer1 = isShortUrl || preferM4aForShort;
