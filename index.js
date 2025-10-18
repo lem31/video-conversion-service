@@ -150,20 +150,18 @@ async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, 
       ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15'
       : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
-const ytdlpArgs = [
-  '--no-playlist',
-  '--no-warnings',
-  '-f', ytFormat,
-  '-o', '-',
-  '--extractor-args', `youtube:player_client=${playerClient}`,
-  '--user-agent',
-    playerClient === 'web_safari'
-      ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15'
-      : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-  '--referer', 'https://www.youtube.com/',
-  cleanedUrl,
-  ...ytExtraArgs
-];
+  const ytdlpArgs = [
+      '--no-playlist',
+      '--no-warnings',
+      '-f', ytFormat,
+      '-o', '-',
+      '--extractor-args', `youtube:player_client=${playerClient}`,
+      '--user-agent', userAgent,
+      '--referer', 'https://www.youtube.com/',
+      '--add-header', 'Accept-Language:en-US,en;q=0.9',
+      cleanedUrl,
+      ...ytExtraArgs
+    ];
 
 
     const ytdlp = spawn('yt-dlp', ytdlpArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
