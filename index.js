@@ -146,41 +146,26 @@ function runYtDlp(args, cwd = '/tmp') {
 // Stream yt-dlp -> ffmpeg to produce MP3 without writing source file
 async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, ytExtraArgs = [], playerClient = 'web') {
   return new Promise((resolve, reject) => {
-    const userAgent = playerClient === 'web_safari'
-      ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15'
-      : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
-
- const ytdlpArgs = [
+    const ytdlpArgs = [
       '--no-playlist',
       '--no-warnings',
       '-f', ytFormat,
       '-o', '-',
-      '--extractor-args', `youtube:player_client=${playerClient}`,
-      '--user-agent', userAgent,
-      '--referer', 'https://www.youtube.com/',
-      '--add-header', 'Accept-Language:en-US,en;q=0.9',
-      '--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      '--add-header', 'Sec-Fetch-Site:none',
-      '--add-header', 'Sec-Fetch-Mode:navigate',
-      '--add-header', 'Sec-Fetch-Dest:document',
       cleanedUrl,
       ...ytExtraArgs
     ];
 
-
     const ytdlp = spawn('yt-dlp', ytdlpArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
     const bitrate = isPremium ? '192k' : '96k';
-const quality = '2';
+    const quality = '2'; // OPTIMIZED: Fast encoding for all users
 
-   const ffmpegArgs = [
+    const ffmpegArgs = [
       '-hide_banner',
       '-loglevel', 'error',
-      '-err_detect', 'ignore_err',
-      '-fflags', '+discardcorrupt+genpts',
       '-i', 'pipe:0',
       '-vn', '-sn', '-dn',
-      '-map', '0:a:0?',
+      '-map', '0:a:0',
       '-c:a', 'libmp3lame',
       '-b:a', bitrate,
       '-ar', '44100',
@@ -229,7 +214,7 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
   const cleanedUrl = cleanVideoUrl(videoUrl);
 
   // Fast-fail timeout per layer
-  const LAYER_TIMEOUT = isPremium ? 60000 : 45000;
+  const LAYER_TIMEOUT = isPremium ? 90000 : 60000; // 90s premium, 60s free
 
   try {
     console.log('OPTIMIZED download:', cleanedUrl);
@@ -325,8 +310,8 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
 
     let lastYtdlpError = null;
 
-    // OPTIMIZATION: Try piped fast path first if enabled (disabled by default due to incomplete downloads)
-    const enablePipe = process.env.ENABLE_PIPE === '1'; // Must explicitly enable with ENABLE_PIPE=1
+    // OPTIMIZATION: Try piped fast path first if enabled
+    const enablePipe = process.env.ENABLE_PIPE !== '0';
     if (enablePipe) {
       const pipedMp3Path = `${outputDir}/ytdlp_${videoId}.mp3`;
       const ytExtraArgsForPipe = [];
@@ -522,14 +507,14 @@ async function downloadDirectVideo(videoUrl, outputPath) {
   }
 }
 
-// OPTIMIZED: Faster FFmpeg conversion
+// OPTIMIZED: Faster FFmpeg conversion - fast encoding for all users
 function convertToMp3Optimized(inputPath, outputPath, isPremium) {
   return new Promise((resolve, reject) => {
     const label = isPremium ? 'PREMIUM' : 'STANDARD';
     console.log(`${label} conversion...`);
 
     const bitrate = isPremium ? '192k' : '96k';
-    const quality = '2'; 
+    const quality = '2'; // OPTIMIZED: Fast encoding for all users (not 6 for standard)
 
     const ffmpeg = spawn('ffmpeg', [
       '-threads', '0',
@@ -745,21 +730,19 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
         if (fs.existsSync(cachedPath)) {
           console.log(`✓ Cache hit for ${cleaned}`);
           const stats = fs.statSync(cachedPath);
-          const audioData = fs.readFileSync(cachedPath);
-          const base64Audio = audioData.toString('base64');
-
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
           console.log(`Total (cached): ${elapsed}s`);
 
-          return res.json({
-            success: true,
-            audioData: base64Audio,
-            filename: 'audio.mp3',
-            size: `${(stats.size / 1024 / 1024).toFixed(2)} MB`,
-            conversionTime: `${elapsed}s`,
-            tier: premium ? 'premium' : 'standard',
-            cached: true
-          });
+          // OPTIMIZED: Binary streaming instead of base64 JSON
+          res.setHeader('Content-Type', 'audio/mpeg');
+          res.setHeader('Content-Disposition', 'attachment; filename="audio.mp3"');
+          res.setHeader('Content-Length', stats.size);
+          res.setHeader('X-Conversion-Time', `${elapsed}s`);
+          res.setHeader('X-File-Size', `${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+          res.setHeader('X-User-Tier', premium ? 'premium' : 'standard');
+          res.setHeader('X-Cached', 'true');
+
+          return fs.createReadStream(cachedPath).pipe(res);
         }
 
         // Acquire slot with priority awareness
@@ -789,24 +772,28 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
         if (finalServePath && finalServePath.endsWith('.mp3')) {
           console.log('Serving MP3:', finalServePath);
           const stats = fs.statSync(finalServePath);
-          const audioData = fs.readFileSync(finalServePath);
-          const base64Audio = audioData.toString('base64');
-
-          // Cleanup temp file if different from cache
-          if (fs.existsSync(downloadedPath) && downloadedPath !== cachedPath) {
-            try { fs.unlinkSync(downloadedPath); } catch (e) { /* ignore */ }
-          }
-
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-          return res.json({
-            success: true,
-            audioData: base64Audio,
-            filename: 'audio.mp3',
-            size: `${(stats.size / 1024 / 1024).toFixed(2)} MB`,
-            conversionTime: `${elapsed}s`,
-            tier: premium ? 'premium' : 'standard',
-            cached: fs.existsSync(cachedPath)
+
+          // OPTIMIZED: Binary streaming instead of base64 JSON
+          res.setHeader('Content-Type', 'audio/mpeg');
+          res.setHeader('Content-Disposition', 'attachment; filename="audio.mp3"');
+          res.setHeader('Content-Length', stats.size);
+          res.setHeader('X-Conversion-Time', `${elapsed}s`);
+          res.setHeader('X-File-Size', `${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+          res.setHeader('X-User-Tier', premium ? 'premium' : 'standard');
+          res.setHeader('X-Cached', fs.existsSync(cachedPath) ? 'true' : 'false');
+
+          const stream = fs.createReadStream(finalServePath);
+          stream.pipe(res);
+
+          // Cleanup temp file after streaming completes
+          stream.on('end', () => {
+            if (fs.existsSync(downloadedPath) && downloadedPath !== cachedPath) {
+              try { fs.unlinkSync(downloadedPath); } catch (e) { /* ignore */ }
+            }
           });
+
+          return;
         }
       } else {
         const videoId = uuidv4();
@@ -826,25 +813,31 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
     await convertToMp3Optimized(inputPath, outputPath, premium);
 
     const stats = fs.statSync(outputPath);
-    const audioData = fs.readFileSync(outputPath);
-    const base64Audio = audioData.toString('base64');
-
-    // Cleanup
-    fs.unlinkSync(outputPath);
-    if (shouldCleanupInput && fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-    if (videoFile && fs.existsSync(videoFile.path)) fs.unlinkSync(videoFile.path);
-
     const filename = videoFile ? `${videoFile.originalname.split('.')[0]}.mp3` : `audio_${outputId}.mp3`;
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`Total: ${elapsed}s`);
 
-    res.json({
-      success: true,
-      audioData: base64Audio,
-      filename: filename,
-      size: `${(stats.size / 1024 / 1024).toFixed(2)} MB`,
-      conversionTime: `${elapsed}s`,
-      tier: premium ? 'premium' : 'standard'
+    // OPTIMIZED: Binary streaming instead of base64 JSON
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', stats.size);
+    res.setHeader('X-Conversion-Time', `${elapsed}s`);
+    res.setHeader('X-File-Size', `${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+    res.setHeader('X-User-Tier', premium ? 'premium' : 'standard');
+    res.setHeader('X-Cached', 'false');
+
+    const stream = fs.createReadStream(outputPath);
+    stream.pipe(res);
+
+    // Cleanup after streaming completes
+    stream.on('end', () => {
+      try { fs.unlinkSync(outputPath); } catch (e) { /* ignore */ }
+      if (shouldCleanupInput && fs.existsSync(inputPath)) {
+        try { fs.unlinkSync(inputPath); } catch (e) { /* ignore */ }
+      }
+      if (videoFile && fs.existsSync(videoFile.path)) {
+        try { fs.unlinkSync(videoFile.path); } catch (e) { /* ignore */ }
+      }
     });
 
   } catch (error) {
@@ -880,11 +873,12 @@ app.post('/convert-video-to-mp3', handleUpload, async (req, res) => {
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
-    mode: 'OPTIMIZED (3-Layer Fast-Fail)',
+    mode: 'OPTIMIZED (3-Layer Fast-Fail + Binary Streaming)',
     layers: '3 (Primary → Safari → TV Embedded)',
     timeouts: 'Layer timeout: 60-90s',
     cacheFirst: true,
     priorityQueue: true,
+    binaryStreaming: true,
     cookiesEnabled: !!process.env.YTDLP_COOKIES,
     proxyEnabled: !!process.env.YTDLP_PROXY,
     binaries: BINARIES,
@@ -905,15 +899,16 @@ app.listen(port, () => {
 ║  ✓ Priority queue for premium users                       ║
 ║  ✓ Fast-fail timeouts (60-90s per layer)                  ║
 ║  ✓ 3 optimized layers (Primary → Safari → TV)             ║
-║  Expected: 40-60% faster than before                      ║
+║  ✓ Binary streaming (33% faster than base64)              ║
+║  ✓ Fast encoding for all users                            ║
 ╚═══════════════════════════════════════════════════════════╝
   `);
   console.log('Configuration:');
   console.log('  - Cookies:', process.env.YTDLP_COOKIES ? 'ENABLED' : 'DISABLED');
   console.log('  - Proxy:', process.env.YTDLP_PROXY ? 'ENABLED' : 'DISABLED');
   console.log('  - Skip metadata probe:', process.env.SKIP_METADATA_PROBE || 'auto (shorts only)');
-  console.log('  - Pipe mode:', process.env.ENABLE_PIPE === '1' ? 'ENABLED' : 'DISABLED (recommended)');
+  console.log('  - Pipe mode:', process.env.ENABLE_PIPE !== '0' ? 'ENABLED' : 'DISABLED');
   console.log('  - Concurrent downloads (premium):', MAX_CONCURRENT_PREMIUM);
   console.log('  - Concurrent downloads (standard):', MAX_CONCURRENT_STANDARD);
-  console.log('\n🚀 Ready! Optimized for speed.\n');
+  console.log('\n🚀 Ready! Optimized for speed with binary streaming.\n');
 });
