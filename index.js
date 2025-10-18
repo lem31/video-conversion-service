@@ -146,26 +146,41 @@ function runYtDlp(args, cwd = '/tmp') {
 // Stream yt-dlp -> ffmpeg to produce MP3 without writing source file
 async function streamYtdlpToFfmpeg(cleanedUrl, ytFormat, outputPath, isPremium, ytExtraArgs = [], playerClient = 'web') {
   return new Promise((resolve, reject) => {
-    const ytdlpArgs = [
+    const userAgent = playerClient === 'web_safari'
+      ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15'
+      : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+
+ const ytdlpArgs = [
       '--no-playlist',
       '--no-warnings',
       '-f', ytFormat,
       '-o', '-',
+      '--extractor-args', `youtube:player_client=${playerClient}`,
+      '--user-agent', userAgent,
+      '--referer', 'https://www.youtube.com/',
+      '--add-header', 'Accept-Language:en-US,en;q=0.9',
+      '--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      '--add-header', 'Sec-Fetch-Site:none',
+      '--add-header', 'Sec-Fetch-Mode:navigate',
+      '--add-header', 'Sec-Fetch-Dest:document',
       cleanedUrl,
       ...ytExtraArgs
     ];
 
+
     const ytdlp = spawn('yt-dlp', ytdlpArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
     const bitrate = isPremium ? '192k' : '96k';
-    const quality = isPremium ? '2' : '6';
+const quality = '2';
 
-    const ffmpegArgs = [
+   const ffmpegArgs = [
       '-hide_banner',
       '-loglevel', 'error',
+      '-err_detect', 'ignore_err',
+      '-fflags', '+discardcorrupt+genpts',
       '-i', 'pipe:0',
       '-vn', '-sn', '-dn',
-      '-map', '0:a:0',
+      '-map', '0:a:0?',
       '-c:a', 'libmp3lame',
       '-b:a', bitrate,
       '-ar', '44100',
@@ -214,7 +229,7 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
   const cleanedUrl = cleanVideoUrl(videoUrl);
 
   // Fast-fail timeout per layer
-  const LAYER_TIMEOUT = isPremium ? 90000 : 60000; // 90s premium, 60s free
+  const LAYER_TIMEOUT = isPremium ? 60000 : 45000;
 
   try {
     console.log('OPTIMIZED download:', cleanedUrl);
@@ -310,8 +325,8 @@ async function downloadVideoWithYtdlpOptimized(videoUrl, outputDir, isPremium) {
 
     let lastYtdlpError = null;
 
-    // OPTIMIZATION: Try piped fast path first if enabled
-    const enablePipe = process.env.ENABLE_PIPE !== '0';
+    // OPTIMIZATION: Try piped fast path first if enabled (disabled by default due to incomplete downloads)
+    const enablePipe = process.env.ENABLE_PIPE === '1'; // Must explicitly enable with ENABLE_PIPE=1
     if (enablePipe) {
       const pipedMp3Path = `${outputDir}/ytdlp_${videoId}.mp3`;
       const ytExtraArgsForPipe = [];
@@ -514,7 +529,7 @@ function convertToMp3Optimized(inputPath, outputPath, isPremium) {
     console.log(`${label} conversion...`);
 
     const bitrate = isPremium ? '192k' : '96k';
-    const quality = isPremium ? '2' : '6';
+    const quality = '2'; 
 
     const ffmpeg = spawn('ffmpeg', [
       '-threads', '0',
@@ -897,7 +912,7 @@ app.listen(port, () => {
   console.log('  - Cookies:', process.env.YTDLP_COOKIES ? 'ENABLED' : 'DISABLED');
   console.log('  - Proxy:', process.env.YTDLP_PROXY ? 'ENABLED' : 'DISABLED');
   console.log('  - Skip metadata probe:', process.env.SKIP_METADATA_PROBE || 'auto (shorts only)');
-  console.log('  - Pipe mode:', process.env.ENABLE_PIPE !== '0' ? 'ENABLED' : 'DISABLED');
+  console.log('  - Pipe mode:', process.env.ENABLE_PIPE === '1' ? 'ENABLED' : 'DISABLED (recommended)');
   console.log('  - Concurrent downloads (premium):', MAX_CONCURRENT_PREMIUM);
   console.log('  - Concurrent downloads (standard):', MAX_CONCURRENT_STANDARD);
   console.log('\n🚀 Ready! Optimized for speed.\n');
